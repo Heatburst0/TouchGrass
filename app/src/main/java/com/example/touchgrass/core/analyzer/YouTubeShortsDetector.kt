@@ -7,75 +7,98 @@ import timber.log.Timber
 import javax.inject.Inject
 
 class YouTubeShortsDetector @Inject constructor() {
-
     var nodeAnalyzer: NodeTreeAnalyzer = NodeTreeAnalyzer()
-
     fun detect(rootNode: AccessibilityNodeInfo): ScreenState {
+        // Run the Single Pass Analysis
+        val analysis = scanTree(rootNode)
 
-        // 1. GUARD: Ignore Normal Video Player
-        // If we see "Enter fullscreen", it is DEFINITELY a long-form video. Abort.
-        Log.d("ShortsTracker", "checking")
-
-        if (isNormalVideoPlayer(rootNode)) {
-            // Timber.d("ShortsDetector: Detected Normal Player (Ignored)")
+        // 1. Logic: Is it a Normal Video?
+        if (analysis.hasEnterFullscreen) {
+            // Log.d("ShortsDetector", "Found 'Enter fullscreen' -> Normal Video")
             return ScreenState.BrowsingFeed
         }
 
-        // 2. POSITIVE MATCH: Check for relaxed Shorts Fingerprints
-        // We removed "Remix" because it's inconsistent.
-        if (hasShortsFingerprints(rootNode)) {
-            val uniqueId = extractVideoSignature(rootNode)
+        // 2. Logic: Is it a Short?
+        // We look for Dislike + Subscribe buttons
+        if (analysis.hasDislikeButton && analysis.hasSubscribeButton) {
 
-            return if (uniqueId.isNotEmpty()) {
-                // Timber.d("ShortsDetector: Detected Short -> WATCHING ($uniqueId)")
-                ScreenState.WatchingShort(uniqueId = uniqueId)
+            // Log.d("ShortsDetector", "Found Shorts UI -> ID: ${analysis.subscribeDescription}")
+
+            return if (analysis.subscribeDescription.isNotEmpty()) {
+                ScreenState.WatchingShort(uniqueId = analysis.subscribeDescription)
             } else {
-                // We see the UI (Dislike btn), but text isn't ready. Keep waiting.
-                // Timber.d("ShortsDetector: Detected Short UI (No ID yet)")
-                ScreenState.Unknown
+                ScreenState.Unknown // UI matches, but text not loaded yet
             }
         }
 
-        // 3. Fallback
-        // If we don't see "Dislike", we assume we are just browsing/scrolling.
         return ScreenState.BrowsingFeed
     }
 
-    private fun hasShortsFingerprints(root: AccessibilityNodeInfo): Boolean {
-        // We relax the rule: If we see "Dislike this video", it's a video.
-        // Since we already excluded Normal Player (Step 1), this is likely a Short.
-        Log.d("ShortsTracker", "inside hasShortsFingerprints new")
+    // Data class to hold all our findings from the scan
+    private data class TreeClues(
+        var hasEnterFullscreen: Boolean = false,
+        var hasDislikeButton: Boolean = false,
+        var hasSubscribeButton: Boolean = false,
+        var subscribeDescription: String = ""
+    )
 
+    /**
+     * Traverses the entire node tree ONCE and fills in the clues.
+     * This replaces all separate find...ByText calls.
+     */
+    private fun scanTree(root: AccessibilityNodeInfo): TreeClues {
+        val clues = TreeClues()
+        val stack = ArrayDeque<AccessibilityNodeInfo>()
+        stack.add(root)
+
+        Log.d("ShortsTracker", "inside hasShortsFingerprints new")
         val logOutput = nodeAnalyzer.logNodeHierarchy(root, "")
         Timber.tag("UI_TREE").d(logOutput)
-        val dislikeNodes = root.findAccessibilityNodeInfosByText("Dislike this video")
 
-        // Extra safety: Ensure we also see "Subscribe" to confirm it's a valid video container
-        // and not just a stray button.
-        val subscribeNodes = root.findAccessibilityNodeInfosByText("Subscribe")
-        val result = dislikeNodes.isNotEmpty() && subscribeNodes.isNotEmpty()
-        Log.d("ShortsTracker", "inside hasShortsFingerprints $result")
-        return result
-    }
+        var nodesChecked = 0
+        // Safety limit to prevent hanging on massive UI trees
+        val maxNodes = 500
 
-    private fun isNormalVideoPlayer(root: AccessibilityNodeInfo): Boolean {
-        // "Enter fullscreen" is the most reliable difference. Shorts don't have it.
-        Log.d("ShortsTracker", "inside isNormalVideoPlayer")
+        while (stack.isNotEmpty() && nodesChecked < maxNodes) {
+            val node = stack.removeLast()
+            nodesChecked++
 
-        return root.findAccessibilityNodeInfosByText("Enter fullscreen").isNotEmpty()
-    }
+            // Safe property access
+            val desc = node.contentDescription?.toString() ?: ""
+            val text = node.text?.toString() ?: ""
+            val className = node.className?.toString() ?: ""
 
-    private fun extractVideoSignature(root: AccessibilityNodeInfo): String {
-        // Use "Subscribe to @ChannelName" as the ID.
-        // It's the most stable text element in your logs.
-        val subscribeNodes = root.findAccessibilityNodeInfosByText("Subscribe to")
-        if (subscribeNodes.isNotEmpty()) {
-            return subscribeNodes[0].contentDescription?.toString() ?: ""
+            // --- CHECK 1: Normal Video Fingerprint ---
+            if (desc == "Enter fullscreen" || text == "Enter fullscreen") {
+                clues.hasEnterFullscreen = true
+            }
+
+            // --- CHECK 2: Shorts Fingerprint (Dislike) ---
+            // Your logs showed this is a RadioButton in Shorts
+            if (desc == "Dislike this video" && className == "android.widget.RadioButton") {
+                clues.hasDislikeButton = true
+            }
+
+            // --- CHECK 3: Shorts Fingerprint (Subscribe) ---
+            if (desc.contains("Subscribe", ignoreCase = true) || text.contains("Subscribe", ignoreCase = true)) {
+                clues.hasSubscribeButton = true
+
+                // If this is the specific "Subscribe to @Name" button, capture it as the ID
+                if (desc.startsWith("Subscribe to")) {
+                    clues.subscribeDescription = desc
+                }
+            }
+
+            // Optimization: If we found everything, we can stop early!
+            if (clues.hasEnterFullscreen || (clues.hasDislikeButton && clues.subscribeDescription.isNotEmpty())) {
+                return clues
+            }
+
+            // Add children
+            for (i in 0 until node.childCount) {
+                node.getChild(i)?.let { stack.add(it) }
+            }
         }
-
-        // Fallback: Try finding the channel name button directly if "Subscribe to" phrasing changes
-        // (This part requires finding the node with text "@ChannelName", but let's stick to the log evidence first)
-
-        return ""
+        return clues
     }
 }

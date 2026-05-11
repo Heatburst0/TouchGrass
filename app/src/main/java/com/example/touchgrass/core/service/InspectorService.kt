@@ -39,42 +39,43 @@ class InspectorService : AccessibilityService() {
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null) return
 
-        // 1. FILTER: Only look at relevant events to save battery
+        // 1. FILTER
         if (event.eventType != AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED &&
             event.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
             event.eventType != AccessibilityEvent.TYPE_VIEW_SCROLLED) {
             return
         }
 
-        // 2. FILTER: Only look at target apps
+        // 2. PACKAGE CHECK
         val packageName = event.packageName?.toString() ?: return
         if (packageName != "com.google.android.youtube" && packageName != "com.instagram.android") {
             return
         }
 
-        // 3. ANALYZE: Get the root node
-        val rootNode = rootInActiveWindow ?: return
-
-        // 4. EXECUTE: Run analysis (Debounce could be added here later)
-        serviceScope.launch {
-            val logOutput = nodeAnalyzer.logNodeHierarchy(rootNode, packageName)
-            Timber.tag("UI_TREE").d(logOutput)
-        }
-
+        // 3. THROTTLE
         val currentTime = System.currentTimeMillis()
         if (currentTime - lastAnalysisTime < ANALYSIS_COOLDOWN_MS) {
             return
         }
         lastAnalysisTime = currentTime
-//        val rootNode = rootInActiveWindow ?: return
-        serviceScope.launch {
-            try {
-                trackerManager.processAccessibilityEvent(rootNode)
-            } catch (e: Exception) {
-                Timber.tag("ShortsTracker").e(e, "Error processing accessibility event")
-            }
+
+        // 4. CAPTURE
+        val rootNode = rootInActiveWindow
+        if (rootNode == null) {
+            Timber.tag("ShortsTracker").w("rootNode was NULL")
+            return
         }
 
+        // 5. EXECUTE (DIRECTLY - NO COROUTINE)
+        // We run this directly to ensure 'rootNode' is valid while we read it.
+        try {
+            trackerManager.processAccessibilityEvent(rootNode)
+        } catch (e: Exception) {
+            Timber.tag("ShortsTracker").e(e, "Error processing event")
+        } finally {
+            // It is good practice to recycle if you aren't using a coroutine
+            // rootNode.recycle()
+        }
     }
 
     override fun onInterrupt() {

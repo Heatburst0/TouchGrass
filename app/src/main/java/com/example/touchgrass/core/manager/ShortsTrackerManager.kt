@@ -19,29 +19,27 @@ class ShortsTrackerManager @Inject constructor(
     val shortsCount: StateFlow<Int> =_shortsCount
 
     private var currentShortId : String? = null
-    fun processAccessibilityEvent(rootNode : AccessibilityNodeInfo){
-        Log.d("ShortsTracker", "working ")
+    fun processAccessibilityEvent(rootNode: AccessibilityNodeInfo) {
 
-        when(val state = detector.detect(rootNode)){
+        when (val state = detector.detect(rootNode)) {
             is ScreenState.WatchingShort -> {
-                if(state.uniqueId!= currentShortId){
+                if (state.uniqueId != currentShortId) {
                     currentShortId = state.uniqueId
                     _shortsCount.value += 1
-
-                    Log.d("ShortsTracker", "New Short Detected! Count: ${_shortsCount.value} | ID: ${state.uniqueId}")
+                    Log.d("ShortsTracker", ">>> NEW SHORT DETECTED! Total: ${_shortsCount.value} | ID: $currentShortId")
                 }
             }
             is ScreenState.BrowsingFeed -> {
-                // User left the player. Reset counting state if needed,
-                // or just wait until they enter a new short.
-                Log.d("ShortsTracker", "BrowsingFeed ")
-                currentShortId = null
-
+                // Only reset if we are DEFINITELY in the feed.
+                if (currentShortId != null) {
+                    Log.d("ShortsTracker", "Session Ended (Browsing Feed)")
+                    currentShortId = null
+                }
             }
             is ScreenState.Unknown -> {
-                // Do nothing
-                Log.d("ShortsTracker", "Unknown")
-
+                // CRITICAL: Do nothing. Keep the previous state active.
+                // This handles the 500ms where "Remix" button might be loading.
+                Log.d("ShortsTracker", "State: UNKNOWN - Heuristics failed to match anything.")
             }
         }
     }
