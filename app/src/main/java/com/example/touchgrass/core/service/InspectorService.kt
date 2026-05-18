@@ -1,9 +1,11 @@
 package com.example.touchgrass.core.service
 
 import android.accessibilityservice.AccessibilityService
+import android.content.Intent
 import android.view.accessibility.AccessibilityEvent
 import com.example.touchgrass.core.analyzer.NodeTreeAnalyzer
 import com.example.touchgrass.core.manager.ShortsTrackerManager
+import com.example.touchgrass.presentation.blockerView.BlockerActivity
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -12,6 +14,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import timber.log.Timber
 import javax.inject.Inject
+import kotlin.jvm.java
 
 // core/service/InspectorService.kt
 @AndroidEntryPoint
@@ -34,6 +37,29 @@ class InspectorService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         Timber.tag("ShortsTracker").i("Service Connected & Ready")
+
+        serviceScope.launch {
+            trackerManager.triggerBlockEvent.collect {
+                triggerHardBlock()
+            }
+        }
+
+    }
+
+    private fun triggerHardBlock() {
+        // Prepare the intent to launch the BlockerActivity
+        val intent = Intent(this, BlockerActivity::class.java).apply {
+            // Required flags when starting an Activity from outside an Activity context
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            addFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK)
+        }
+
+        try {
+            startActivity(intent)
+        } catch (e: Exception) {
+            // Fallback: If permission fails, we just force the Home button
+            performGlobalAction(GLOBAL_ACTION_HOME)
+        }
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {

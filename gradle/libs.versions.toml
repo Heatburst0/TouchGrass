@@ -12,7 +12,7 @@ lifecycleRuntimeKtx = "2.10.0"
 activityCompose = "1.12.2"
 composeBom = "2024.09.00"
 
-hilt = "2.50"
+hilt = "2.51.1"
 timber = "5.0.1"
 room = "2.6.1"
 
