@@ -5,14 +5,9 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.tooling.preview.Preview
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.example.touchgrass.presentation.dashboard.DashboardViewModel
 import com.example.touchgrass.presentation.dashboard.DoomscrollDashboard
@@ -30,13 +25,17 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    // 2. Retrieve the ViewModel using Hilt's Compose integration
-                    val viewModel: DashboardViewModel = hiltViewModel() // Hilt takes over
-
-                    // 3. Render the Dashboard
-                    DoomscrollDashboard(viewModel= viewModel)
+                    val viewModel: DashboardViewModel = hiltViewModel()
+                    DoomscrollDashboard(viewModel = viewModel)
                 }
             }
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // If the system flipped our service off and we hold WRITE_SECURE_SETTINGS
+        // (adb grant), silently flip it back on.
+        tryForceEnableAccessibility(this)
     }
 }

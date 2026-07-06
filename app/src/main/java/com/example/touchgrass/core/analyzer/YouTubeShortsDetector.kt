@@ -1,69 +1,50 @@
 package com.example.touchgrass.core.analyzer
 
-import android.util.Log
 import android.view.accessibility.AccessibilityNodeInfo
 import com.example.touchgrass.core.model.ScreenState
-import timber.log.Timber
 import javax.inject.Inject
 
 class YouTubeShortsDetector @Inject constructor() {
-    var nodeAnalyzer: NodeTreeAnalyzer = NodeTreeAnalyzer()
+
+    // Matches the spoken text of a video timeline: "0 minutes 5 seconds of..."
+    private val timeRegex = Regex(".*minutes.*seconds.*", RegexOption.IGNORE_CASE)
+
     fun detect(rootNode: AccessibilityNodeInfo): ScreenState {
-        // Run the Single Pass Analysis
         val analysis = scanTree(rootNode)
 
-        // 1. Logic: Is it a Normal Video?
+        // 1. GUARD: Is it a Normal Video?
+        // Normal videos have a fullscreen toggle. Shorts do not.
         if (analysis.hasEnterFullscreen) {
-            // Log.d("ShortsDetector", "Found 'Enter fullscreen' -> Normal Video")
             return ScreenState.BrowsingFeed
         }
 
-        // 2. Logic: Is it a Short?
-        // We look for Dislike + Subscribe buttons
-        if (analysis.hasDislikeButton && analysis.hasSubscribeButton) {
-
-            // Log.d("ShortsDetector", "Found Shorts UI -> ID: ${analysis.subscribeDescription}")
-
-            return if (analysis.subscribeDescription.isNotEmpty()) {
-                ScreenState.WatchingShort(uniqueId = analysis.subscribeDescription)
-            } else {
-                ScreenState.Unknown // UI matches, but text not loaded yet
-            }
+        // 2. LOGIC: Is it a Short?
+        // We no longer look for Like/Dislike. We look for the literal video progress bar!
+        if (analysis.hasVideoProgressBar && analysis.channelSignature.isNotEmpty()) {
+            return ScreenState.WatchingShort(uniqueId = analysis.channelSignature)
         }
 
         return ScreenState.BrowsingFeed
     }
 
-    // Data class to hold all our findings from the scan
     private data class TreeClues(
         var hasEnterFullscreen: Boolean = false,
-        var hasDislikeButton: Boolean = false,
-        var hasSubscribeButton: Boolean = false,
-        var subscribeDescription: String = ""
+        var hasVideoProgressBar: Boolean = false,
+        var channelSignature: String = ""
     )
 
-    /**
-     * Traverses the entire node tree ONCE and fills in the clues.
-     * This replaces all separate find...ByText calls.
-     */
     private fun scanTree(root: AccessibilityNodeInfo): TreeClues {
         val clues = TreeClues()
         val stack = ArrayDeque<AccessibilityNodeInfo>()
         stack.add(root)
 
-        Log.d("ShortsTracker", "inside hasShortsFingerprints new")
-        val logOutput = nodeAnalyzer.logNodeHierarchy(root, "")
-        Timber.tag("UI_TREE").d(logOutput)
-
         var nodesChecked = 0
-        // Safety limit to prevent hanging on massive UI trees
         val maxNodes = 500
 
         while (stack.isNotEmpty() && nodesChecked < maxNodes) {
             val node = stack.removeLast()
             nodesChecked++
 
-            // Safe property access
             val desc = node.contentDescription?.toString() ?: ""
             val text = node.text?.toString() ?: ""
             val className = node.className?.toString() ?: ""
@@ -73,24 +54,22 @@ class YouTubeShortsDetector @Inject constructor() {
                 clues.hasEnterFullscreen = true
             }
 
-            // --- CHECK 2: Shorts Fingerprint (Dislike) ---
-            // Your logs showed this is a RadioButton in Shorts
-            if (desc == "Dislike this video" && className == "android.widget.RadioButton") {
-                clues.hasDislikeButton = true
+            // --- CHECK 2: The Structural Video Player Fingerprint ---
+            // Instead of looking for fragile UI buttons, we look for the video seekbar itself.
+            // Your logs: [SeekBar] Desc: 0 minutes 2 seconds of 0 minutes 58 seconds
+            if (className == "android.widget.SeekBar" && timeRegex.matches(desc)) {
+                clues.hasVideoProgressBar = true
             }
 
-            // --- CHECK 3: Shorts Fingerprint (Subscribe) ---
-            if (desc.contains("Subscribe", ignoreCase = true) || text.contains("Subscribe", ignoreCase = true)) {
-                clues.hasSubscribeButton = true
-
-                // If this is the specific "Subscribe to @Name" button, capture it as the ID
-                if (desc.startsWith("Subscribe to")) {
-                    clues.subscribeDescription = desc
-                }
+            // --- CHECK 3: The Channel Signature (For Unique ID) ---
+            // YouTube sometimes uses "Subscribe to @Name" or "Go to channel @Name"
+            if (desc.startsWith("Subscribe to @", ignoreCase = true) ||
+                desc.startsWith("Go to channel @", ignoreCase = true)) {
+                clues.channelSignature = desc
             }
 
-            // Optimization: If we found everything, we can stop early!
-            if (clues.hasEnterFullscreen || (clues.hasDislikeButton && clues.subscribeDescription.isNotEmpty())) {
+            // --- OPTIMIZATION: Early Exit ---
+            if (clues.hasEnterFullscreen || (clues.hasVideoProgressBar && clues.channelSignature.isNotEmpty())) {
                 return clues
             }
 

@@ -11,10 +11,11 @@ import javax.inject.Inject
 class DashboardViewModel @Inject constructor(
     private val trackerManager: ShortsTrackerManager
 ) : ViewModel() {
-    // Expose the stats directly from the singleton manager
+    // Expose live state directly from the singleton manager
     val stats: StateFlow<ShortsStats> = trackerManager.stats
+    val shortsLimit: StateFlow<Int> = trackerManager.shortsLimit
 
     fun updateShortsLimit(newLimit: Int) {
-        trackerManager.shortsLimit = newLimit
+        trackerManager.updateShortsLimit(newLimit)
     }
 }

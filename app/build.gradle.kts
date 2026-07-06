@@ -68,4 +68,7 @@ dependencies {
 
     // Timber
     implementation(libs.timber)
+
+    // DataStore (persist limit + daily stats)
+    implementation(libs.androidx.datastore.preferences)
 }

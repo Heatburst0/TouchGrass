@@ -3,250 +3,524 @@ package com.example.touchgrass.presentation.dashboard
 import android.content.Intent
 import android.net.Uri
 import android.provider.Settings
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.animateIntAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.example.touchgrass.formatDuration
 import com.example.touchgrass.isAccessibilityEnabled
+import com.example.touchgrass.isIgnoringBatteryOptimizations
+import com.example.touchgrass.requestIgnoreBatteryOptimizations
+import com.example.touchgrass.ui.theme.AmberWarn
+import com.example.touchgrass.ui.theme.DangerRed
+import com.example.touchgrass.ui.theme.DangerRedDeep
+import com.example.touchgrass.ui.theme.GrassGreen
+import com.example.touchgrass.ui.theme.Ink
+import com.example.touchgrass.ui.theme.InkBorder
+import com.example.touchgrass.ui.theme.InkElevated
+import com.example.touchgrass.ui.theme.TextPrimary
+import com.example.touchgrass.ui.theme.TextSecondary
+import java.time.LocalDate
+import java.time.format.DateTimeFormatter
 import java.util.concurrent.TimeUnit
+import kotlin.math.roundToInt
+
+private val CardShape = RoundedCornerShape(20.dp)
 
 @Composable
 fun DoomscrollDashboard(viewModel: DashboardViewModel) {
     val stats by viewModel.stats.collectAsState()
+    val limit by viewModel.shortsLimit.collectAsState()
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
 
-    // States to hold permission status
     var isServiceActive by remember { mutableStateOf(isAccessibilityEnabled(context)) }
     var canDrawOverlays by remember { mutableStateOf(Settings.canDrawOverlays(context)) }
+    var batteryExempt by remember { mutableStateOf(isIgnoringBatteryOptimizations(context)) }
 
-    // Re-check permissions every time the user brings the app back to the foreground
+    // Re-check permissions every time the app returns to the foreground
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 isServiceActive = isAccessibilityEnabled(context)
                 canDrawOverlays = Settings.canDrawOverlays(context)
+                batteryExempt = isIgnoringBatteryOptimizations(context)
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    // Convert millis to readable formats
     val totalMinutes = TimeUnit.MILLISECONDS.toMinutes(stats.totalTimeMillis)
-    val totalSeconds = TimeUnit.MILLISECONDS.toSeconds(stats.totalTimeMillis) % 60
-
-    // Creative Data Context
-    val stepsMissed = (totalMinutes * 100).toInt() // Approx 100 steps per min of walking
-    val pagesNotRead = (totalMinutes * 0.5).toInt() // Approx 2 mins per book page
+    val limitReached = stats.totalCount >= limit
+    val setupIncomplete = !isServiceActive || !canDrawOverlays || !batteryExempt
 
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFF121212))
-            .padding(24.dp),
+            .background(Ink)
+            .verticalScroll(rememberScrollState())
+            .statusBarsPadding()
+            .navigationBarsPadding()
+            .padding(horizontal = 20.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Text(
-            text = "TODAY'S REALITY CHECK",
-            color = Color(0xFF4CAF50),
-            fontWeight = FontWeight.Bold,
-            letterSpacing = 2.sp,
-            modifier = Modifier.padding(top = 40.dp, bottom = 24.dp)
-        )
+        Spacer(Modifier.height(16.dp))
 
-        // --- 1. ACCESSIBILITY PERMISSION CARD ---
-        val accessibilityText = if (isServiceActive) "Tracking Active. You are being watched." else "Tracking Disabled. Tap to Enable."
-        PermissionStatusCard(
-            isActive = isServiceActive,
-            text = accessibilityText,
-            onClick = {
-                context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-            }
-        )
-
-        // --- 2. OVERLAY PERMISSION CARD ---
-        if (!canDrawOverlays) {
-            Spacer(modifier = Modifier.height(12.dp))
-            PermissionStatusCard(
-                isActive = false,
-                text = "Missing Display Permission. Tap to Enable.",
-                onClick = {
-                    val intent = Intent(
-                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                        Uri.parse("package:${context.packageName}")
-                    )
-                    context.startActivity(intent)
-                }
-            )
-        }
-
-        Spacer(modifier = Modifier.height(24.dp))
-
-        // --- 3. DAILY LIMIT SLIDER ---
-        // (Defaulting to 5 here. Ideally, this hooks into a DataStore via your ViewModel)
-        var limit by remember { mutableFloatStateOf(5f) }
-
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(16.dp))
-                .background(Color(0xFF1E1E1E))
-                .padding(horizontal = 20.dp, vertical = 16.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Text("Daily Shorts Limit:", color = Color.Gray, fontSize = 14.sp)
-                Text("${limit.toInt()}", color = Color.White, fontWeight = FontWeight.Bold)
-            }
-
-            Slider(
-                value = limit,
-                onValueChange = { newLimit ->
-                    limit = newLimit
-                    // TODO: Add a function in your ViewModel to update this value in the TrackerManager
-                    // viewModel.updateShortsLimit(newLimit.toInt())
-                },
-                valueRange = 1f..50f,
-                steps = 48,
-                colors = SliderDefaults.colors(
-                    thumbColor = Color(0xFF4CAF50),
-                    activeTrackColor = Color(0xFF4CAF50)
-                )
-            )
-        }
-
-        Spacer(modifier = Modifier.height(24.dp))
-
-        // Main Stat Card
-        StatCard(
-            title = "Shorts Devoured",
-            value = "${stats.totalCount}",
-            highlightColor = Color(0xFFFF5252) // Warning Red
-        )
-
-        Spacer(modifier = Modifier.height(16.dp))
-
+        // ---- Header ----
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(16.dp)
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            StatCard(
-                title = "Time Vanished",
-                value = "${totalMinutes}m ${totalSeconds}s",
-                modifier = Modifier.weight(1f),
-                highlightColor = Color(0xFFFFB74D)
+            Column {
+                Text(
+                    text = "TouchGrass",
+                    color = TextPrimary,
+                    fontSize = 24.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    letterSpacing = (-0.5).sp
+                )
+                Text(
+                    text = LocalDate.now().format(DateTimeFormatter.ofPattern("EEEE, MMMM d")),
+                    color = TextSecondary,
+                    fontSize = 13.sp
+                )
+            }
+            StatusChip(active = isServiceActive) {
+                context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+            }
+        }
+
+        Spacer(Modifier.height(20.dp))
+
+        // ---- Hero progress ring ----
+        HeroRing(count = stats.totalCount, limit = limit)
+
+        Spacer(Modifier.height(4.dp))
+
+        val remaining = (limit - stats.totalCount).coerceAtLeast(0)
+        Text(
+            text = if (limitReached) "LIMIT REACHED - SHORTS ARE BLOCKED"
+            else "$remaining left before lockout",
+            color = if (limitReached) DangerRed else TextSecondary,
+            fontSize = 13.sp,
+            fontWeight = if (limitReached) FontWeight.Bold else FontWeight.Medium,
+            letterSpacing = if (limitReached) 1.sp else 0.sp
+        )
+
+        Spacer(Modifier.height(24.dp))
+
+        // ---- Stat tiles ----
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            StatTile(
+                label = "Time wasted today",
+                value = formatDuration(stats.totalTimeMillis),
+                accent = AmberWarn,
+                modifier = Modifier.weight(1f)
             )
-            StatCard(
-                title = "Avg. Per Short",
+            StatTile(
+                label = "Avg per short",
                 value = "${stats.averageTimeSeconds}s",
-                modifier = Modifier.weight(1f),
-                highlightColor = Color(0xFF64B5F6)
+                accent = GrassGreen,
+                modifier = Modifier.weight(1f)
             )
         }
 
-        Spacer(modifier = Modifier.height(40.dp))
+        Spacer(Modifier.height(12.dp))
 
-        // The Creative "Could Have Done" Section
+        // ---- Daily limit control (persisted via DataStore) ----
+        LimitCard(
+            limit = limit,
+            onLimitChange = { viewModel.updateShortsLimit(it) }
+        )
+
+        // ---- Setup / permission cards ----
+        if (setupIncomplete) {
+            Spacer(Modifier.height(24.dp))
+            SectionTitle("Finish setup")
+            Spacer(Modifier.height(10.dp))
+
+            if (!isServiceActive) {
+                SetupCard(
+                    badge = "1",
+                    title = "Turn on tracking",
+                    subtitle = "Enable the TouchGrass accessibility service",
+                    onClick = { context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
+                )
+                Spacer(Modifier.height(10.dp))
+            }
+            if (!canDrawOverlays) {
+                SetupCard(
+                    badge = "2",
+                    title = "Allow the block screen",
+                    subtitle = "Display over other apps permission",
+                    onClick = {
+                        context.startActivity(
+                            Intent(
+                                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                Uri.parse("package:${context.packageName}")
+                            )
+                        )
+                    }
+                )
+                Spacer(Modifier.height(10.dp))
+            }
+            if (!batteryExempt) {
+                SetupCard(
+                    badge = "3",
+                    title = "Stop Android from killing tracking",
+                    subtitle = "Battery optimization is why tracking turns off randomly",
+                    onClick = { requestIgnoreBatteryOptimizations(context) }
+                )
+            }
+        }
+
+        // ---- Reality check ----
         if (totalMinutes > 0) {
-            Text(
-                text = "Instead of scrolling, you could have...",
-                color = Color.LightGray,
-                fontSize = 14.sp,
-                modifier = Modifier.padding(bottom = 16.dp)
-            )
-
-            AlternativeActionCard("Walked $stepsMissed steps \uD83D\uDC5F")
-            Spacer(modifier = Modifier.height(8.dp))
-            AlternativeActionCard("Read $pagesNotRead pages of a book \uD83D\uDCDA")
+            Spacer(Modifier.height(24.dp))
+            SectionTitle("Instead, you could have...")
+            Spacer(Modifier.height(10.dp))
+            RealityRow("Walked ${totalMinutes * 100} steps")
+            Spacer(Modifier.height(8.dp))
+            RealityRow("Read ${(totalMinutes * 0.5).roundToInt()} pages of a book")
+            Spacer(Modifier.height(8.dp))
+            RealityRow("Taken ${totalMinutes * 4} deep breaths outside")
         }
+
+        Spacer(Modifier.height(24.dp))
+
+        Text(
+            text = "Tip: if tracking still dies, open your phone's battery settings, set TouchGrass to \"Unrestricted\", and lock it in the recent-apps screen.",
+            color = TextSecondary.copy(alpha = 0.7f),
+            fontSize = 12.sp,
+            textAlign = TextAlign.Center,
+            lineHeight = 17.sp,
+            modifier = Modifier.padding(horizontal = 8.dp)
+        )
+
+        Spacer(Modifier.height(24.dp))
     }
 }
 
+// ---------------------------------------------------------------------------
+
 @Composable
-fun StatCard(
-    title: String,
-    value: String,
-    modifier: Modifier = Modifier,
-    highlightColor: Color = Color.White
-) {
-    Box(
-        modifier = modifier
-            .clip(RoundedCornerShape(16.dp))
-            .background(Color(0xFF1E1E1E))
-            .padding(20.dp),
-        contentAlignment = Alignment.Center
-    ) {
+private fun HeroRing(count: Int, limit: Int) {
+    val progress = if (limit > 0) (count.toFloat() / limit).coerceIn(0f, 1f) else 0f
+    val animatedProgress by animateFloatAsState(
+        targetValue = progress,
+        animationSpec = tween(900, easing = FastOutSlowInEasing),
+        label = "ringProgress"
+    )
+    val ringColor by animateColorAsState(
+        targetValue = when {
+            progress >= 1f -> DangerRed
+            progress >= 0.7f -> AmberWarn
+            else -> GrassGreen
+        },
+        animationSpec = tween(500),
+        label = "ringColor"
+    )
+    val animatedCount by animateIntAsState(
+        targetValue = count,
+        animationSpec = tween(500),
+        label = "count"
+    )
+
+    Box(modifier = Modifier.size(250.dp), contentAlignment = Alignment.Center) {
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val stroke = 20.dp.toPx()
+            val inset = stroke / 2
+            val arcSize = Size(size.width - stroke, size.height - stroke)
+            val topLeft = Offset(inset, inset)
+            // Track
+            drawArc(
+                color = InkBorder,
+                startAngle = 135f,
+                sweepAngle = 270f,
+                useCenter = false,
+                topLeft = topLeft,
+                size = arcSize,
+                style = Stroke(width = stroke, cap = StrokeCap.Round)
+            )
+            // Progress
+            if (animatedProgress > 0.005f) {
+                drawArc(
+                    color = ringColor,
+                    startAngle = 135f,
+                    sweepAngle = 270f * animatedProgress,
+                    useCenter = false,
+                    topLeft = topLeft,
+                    size = arcSize,
+                    style = Stroke(width = stroke, cap = StrokeCap.Round)
+                )
+            }
+        }
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Text(
-                text = value,
-                color = highlightColor,
-                fontSize = 32.sp,
+                text = "$animatedCount",
+                color = TextPrimary,
+                fontSize = 68.sp,
                 fontWeight = FontWeight.Black
             )
             Text(
-                text = title,
-                color = Color.Gray,
-                fontSize = 12.sp,
-                textAlign = TextAlign.Center
+                text = "of $limit shorts",
+                color = TextSecondary,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.Medium
             )
         }
     }
 }
 
-// Updated to accept 'text' parameter
 @Composable
-fun PermissionStatusCard(isActive: Boolean, text: String, onClick: () -> Unit) {
-    val backgroundColor = if (isActive) Color(0xFF1E3320) else Color(0xFF331E1E)
-    val textColor = if (isActive) Color(0xFF81C784) else Color(0xFFE57373)
-
-    Button(
-        onClick = onClick,
-        colors = ButtonDefaults.buttonColors(containerColor = backgroundColor),
-        shape = RoundedCornerShape(12.dp),
-        modifier = Modifier.fillMaxWidth()
+private fun StatusChip(active: Boolean, onClick: () -> Unit) {
+    val pulse by rememberInfiniteTransition(label = "pulse").animateFloat(
+        initialValue = 0.35f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(900), RepeatMode.Reverse),
+        label = "dotAlpha"
+    )
+    val color = if (active) GrassGreen else DangerRed
+    Row(
+        modifier = Modifier
+            .clip(RoundedCornerShape(50))
+            .background(InkElevated)
+            .border(1.dp, InkBorder, RoundedCornerShape(50))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
+        Box(
+            modifier = Modifier
+                .size(8.dp)
+                .clip(CircleShape)
+                .background(color.copy(alpha = if (active) pulse else 1f))
+        )
+        Spacer(Modifier.width(8.dp))
         Text(
-            text = text,
-            color = textColor,
-            fontWeight = FontWeight.SemiBold,
-            modifier = Modifier.padding(vertical = 8.dp)
+            text = if (active) "Guarding" else "Off",
+            color = color,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.SemiBold
         )
     }
 }
 
 @Composable
-fun AlternativeActionCard(text: String) {
+private fun StatTile(
+    label: String,
+    value: String,
+    accent: Color,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier
+            .clip(CardShape)
+            .background(InkElevated)
+            .border(1.dp, InkBorder, CardShape)
+            .padding(18.dp)
+    ) {
+        Text(text = value, color = accent, fontSize = 26.sp, fontWeight = FontWeight.ExtraBold)
+        Spacer(Modifier.height(4.dp))
+        Text(text = label, color = TextSecondary, fontSize = 12.sp)
+    }
+}
+
+@Composable
+private fun LimitCard(limit: Int, onLimitChange: (Int) -> Unit) {
+    // Draft state while dragging; committed (and persisted) on release
+    var draft by remember(limit) { mutableFloatStateOf(limit.toFloat()) }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(CardShape)
+            .background(InkElevated)
+            .border(1.dp, InkBorder, CardShape)
+            .padding(horizontal = 18.dp, vertical = 16.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column {
+                Text(
+                    text = "Daily limit",
+                    color = TextPrimary,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Text(
+                    text = "Blocks Shorts after ${draft.roundToInt()} videos",
+                    color = TextSecondary,
+                    fontSize = 12.sp
+                )
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                RoundStepButton("-", enabled = limit > 1) { onLimitChange(limit - 1) }
+                Text(
+                    text = "${draft.roundToInt()}",
+                    color = GrassGreen,
+                    fontSize = 24.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.width(52.dp)
+                )
+                RoundStepButton("+", enabled = limit < 50) { onLimitChange(limit + 1) }
+            }
+        }
+        Slider(
+            value = draft,
+            onValueChange = { draft = it },
+            onValueChangeFinished = { onLimitChange(draft.roundToInt()) },
+            valueRange = 1f..50f,
+            colors = SliderDefaults.colors(
+                thumbColor = GrassGreen,
+                activeTrackColor = GrassGreen,
+                inactiveTrackColor = InkBorder
+            )
+        )
+    }
+}
+
+@Composable
+private fun RoundStepButton(symbol: String, enabled: Boolean, onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .size(36.dp)
+            .clip(CircleShape)
+            .background(if (enabled) InkBorder else InkBorder.copy(alpha = 0.4f))
+            .clickable(enabled = enabled, onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = symbol,
+            color = if (enabled) TextPrimary else TextSecondary,
+            fontSize = 20.sp,
+            fontWeight = FontWeight.Bold
+        )
+    }
+}
+
+@Composable
+private fun SectionTitle(text: String) {
+    Text(
+        text = text.uppercase(),
+        color = TextSecondary,
+        fontSize = 12.sp,
+        fontWeight = FontWeight.Bold,
+        letterSpacing = 1.5.sp,
+        modifier = Modifier.fillMaxWidth()
+    )
+}
+
+@Composable
+private fun SetupCard(badge: String, title: String, subtitle: String, onClick: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .background(Color(0xFF2C2C2C))
+            .clip(CardShape)
+            .background(DangerRedDeep)
+            .border(1.dp, DangerRed.copy(alpha = 0.35f), CardShape)
+            .clickable(onClick = onClick)
             .padding(16.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(
-            text = text,
-            color = Color.White,
-            fontWeight = FontWeight.Medium
+        Box(
+            modifier = Modifier
+                .size(34.dp)
+                .clip(CircleShape)
+                .background(DangerRed.copy(alpha = 0.2f)),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(text = badge, color = DangerRed, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+        }
+        Spacer(Modifier.width(14.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(text = title, color = TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+            Text(text = subtitle, color = TextSecondary, fontSize = 12.sp, lineHeight = 16.sp)
+        }
+        Text(text = ">", color = TextSecondary, fontSize = 20.sp)
+    }
+}
+
+@Composable
+private fun RealityRow(text: String) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(InkElevated)
+            .border(1.dp, InkBorder, RoundedCornerShape(14.dp))
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .size(6.dp)
+                .clip(CircleShape)
+                .background(GrassGreen)
         )
+        Spacer(Modifier.width(12.dp))
+        Text(text = text, color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Medium)
     }
 }
