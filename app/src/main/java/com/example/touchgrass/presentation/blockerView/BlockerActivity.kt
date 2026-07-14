@@ -42,9 +42,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.lifecycleScope
+import com.example.touchgrass.MainActivity
 import com.example.touchgrass.core.manager.ShortsStats
 import com.example.touchgrass.core.manager.ShortsTrackerManager
+import com.example.touchgrass.core.rewards.RewardsManager
 import com.example.touchgrass.formatDuration
+import com.example.touchgrass.ui.theme.AmberWarn
 import com.example.touchgrass.ui.theme.DangerRed
 import com.example.touchgrass.ui.theme.GrassGreen
 import com.example.touchgrass.ui.theme.Ink
@@ -52,6 +56,7 @@ import com.example.touchgrass.ui.theme.TextPrimary
 import com.example.touchgrass.ui.theme.TextSecondary
 import com.example.touchgrass.ui.theme.TouchGrassTheme
 import dagger.hilt.android.AndroidEntryPoint
+import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 @AndroidEntryPoint
@@ -59,6 +64,9 @@ class BlockerActivity : ComponentActivity() {
 
     @Inject
     lateinit var trackerManager: ShortsTrackerManager
+
+    @Inject
+    lateinit var rewards: RewardsManager
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -70,15 +78,36 @@ class BlockerActivity : ComponentActivity() {
                 BackHandler(enabled = true) {}
 
                 val stats by trackerManager.stats.collectAsState()
-                val limit by trackerManager.shortsLimit.collectAsState()
+                val limit by trackerManager.effectiveLimit.collectAsState()
+                val points by rewards.pointsBalance.collectAsState()
 
                 BlockerScreen(
                     stats = stats,
                     limit = limit,
+                    points = points,
+                    onRedeem = { redeemAndResume() },
+                    onGoRead = { openLibrary() },
                     onExit = { forceHomeAndExit() }
                 )
             }
         }
+    }
+
+    /** Spend points for extra shorts, then get out of the way. */
+    private fun redeemAndResume() {
+        lifecycleScope.launch {
+            if (rewards.redeemExtraShorts()) finish()
+        }
+    }
+
+    private fun openLibrary() {
+        startActivity(
+            Intent(this, MainActivity::class.java).apply {
+                putExtra(MainActivity.EXTRA_START_ROUTE, "library")
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+        )
+        finish()
     }
 
     private fun forceHomeAndExit() {
@@ -92,7 +121,14 @@ class BlockerActivity : ComponentActivity() {
 }
 
 @Composable
-private fun BlockerScreen(stats: ShortsStats, limit: Int, onExit: () -> Unit) {
+private fun BlockerScreen(
+    stats: ShortsStats,
+    limit: Int,
+    points: Int,
+    onRedeem: () -> Unit,
+    onGoRead: () -> Unit,
+    onExit: () -> Unit
+) {
     val pulse by rememberInfiniteTransition(label = "pulse").animateFloat(
         initialValue = 1f,
         targetValue = 1.07f,
@@ -176,6 +212,47 @@ private fun BlockerScreen(stats: ShortsStats, limit: Int, onExit: () -> Unit) {
             )
         ) {
             Text(text = "Go touch grass", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+        }
+
+        Spacer(Modifier.height(12.dp))
+
+        // ---- Earn-back paths ----
+        if (points >= RewardsManager.SHORTS_UNLOCK_COST) {
+            Button(
+                onClick = onRedeem,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(52.dp),
+                shape = RoundedCornerShape(16.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = AmberWarn.copy(alpha = 0.15f),
+                    contentColor = AmberWarn
+                )
+            ) {
+                Text(
+                    text = "Use ${RewardsManager.SHORTS_UNLOCK_COST} pts for +${RewardsManager.SHORTS_UNLOCK_AMOUNT} shorts (you have $points)",
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+        } else {
+            Button(
+                onClick = onGoRead,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(52.dp),
+                shape = RoundedCornerShape(16.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color.White.copy(alpha = 0.07f),
+                    contentColor = TextPrimary
+                )
+            ) {
+                Text(
+                    text = "Read 2 pages, earn +${RewardsManager.SHORTS_UNLOCK_AMOUNT} shorts",
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
         }
 
         Spacer(Modifier.height(16.dp))

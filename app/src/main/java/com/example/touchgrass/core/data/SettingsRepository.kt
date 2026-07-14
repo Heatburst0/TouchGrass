@@ -34,6 +34,10 @@ class SettingsRepository @Inject constructor(
         val DAY_KEY = stringPreferencesKey("day_key")
         val DAY_COUNT = intPreferencesKey("day_count")
         val DAY_TIME_MILLIS = longPreferencesKey("day_time_millis")
+        val EXTRA_SHORTS_DAY = stringPreferencesKey("extra_shorts_day")
+        val EXTRA_SHORTS_COUNT = intPreferencesKey("extra_shorts_count")
+        val NUDGE_DAY = stringPreferencesKey("nudge_day")
+        val NUDGE_BUCKET = intPreferencesKey("nudge_bucket")
     }
 
     val shortsLimit: Flow<Int> = context.dataStore.data
@@ -59,6 +63,40 @@ class SettingsRepository @Inject constructor(
             it[Keys.DAY_KEY] = LocalDate.now().toString()
             it[Keys.DAY_COUNT] = count
             it[Keys.DAY_TIME_MILLIS] = timeMillis
+        }
+    }
+
+    // ---- Earned extra shorts (redeemed with reading points; day-scoped) ----
+
+    val extraShortsToday: Flow<Int> = context.dataStore.data.map {
+        if (it[Keys.EXTRA_SHORTS_DAY] == LocalDate.now().toString()) {
+            it[Keys.EXTRA_SHORTS_COUNT] ?: 0
+        } else 0
+    }
+
+    suspend fun addExtraShorts(amount: Int) {
+        context.dataStore.edit {
+            val today = LocalDate.now().toString()
+            if (it[Keys.EXTRA_SHORTS_DAY] != today) {
+                it[Keys.EXTRA_SHORTS_DAY] = today
+                it[Keys.EXTRA_SHORTS_COUNT] = amount
+            } else {
+                it[Keys.EXTRA_SHORTS_COUNT] = (it[Keys.EXTRA_SHORTS_COUNT] ?: 0) + amount
+            }
+        }
+    }
+
+    // ---- Screen-time nudge bookkeeping (which 3h bucket we last nudged for) ----
+
+    suspend fun getNudgeBucket(dayKey: String): Int {
+        val prefs = context.dataStore.data.first()
+        return if (prefs[Keys.NUDGE_DAY] == dayKey) prefs[Keys.NUDGE_BUCKET] ?: 0 else 0
+    }
+
+    suspend fun setNudgeBucket(dayKey: String, bucket: Int) {
+        context.dataStore.edit {
+            it[Keys.NUDGE_DAY] = dayKey
+            it[Keys.NUDGE_BUCKET] = bucket
         }
     }
 

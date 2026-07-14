@@ -1,12 +1,15 @@
 package com.example.touchgrass
 
 import android.Manifest
+import android.app.AppOpsManager
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.os.PowerManager
+import android.os.Process
 import android.provider.Settings
 import com.example.touchgrass.core.service.InspectorService
 import timber.log.Timber
@@ -75,6 +78,22 @@ fun tryForceEnableAccessibility(context: Context): Boolean {
         Timber.tag("ShortsTracker").e(e, "Failed to force-enable accessibility")
         false
     }
+}
+
+/** Special app access "Usage access" — needed for screen-time based nudges. */
+fun hasUsageAccess(context: Context): Boolean {
+    val appOps = context.getSystemService(Context.APP_OPS_SERVICE) as AppOpsManager
+    val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        appOps.unsafeCheckOpNoThrow(
+            AppOpsManager.OPSTR_GET_USAGE_STATS, Process.myUid(), context.packageName
+        )
+    } else {
+        @Suppress("DEPRECATION")
+        appOps.checkOpNoThrow(
+            AppOpsManager.OPSTR_GET_USAGE_STATS, Process.myUid(), context.packageName
+        )
+    }
+    return mode == AppOpsManager.MODE_ALLOWED
 }
 
 /** "1h 23m", "12m 5s" or "45s" */

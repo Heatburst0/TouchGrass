@@ -1,9 +1,17 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.ksp) // Replaces kapt for faster builds
     alias(libs.plugins.hilt.android)
+}
+
+// API keys live in local.properties (never committed)
+val localProperties = Properties().apply {
+    val file = rootProject.file("local.properties")
+    if (file.exists()) file.inputStream().use { load(it) }
 }
 
 android {
@@ -20,6 +28,14 @@ android {
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        // Free-tier Gemini key for the reading-comprehension quiz.
+        // Add GEMINI_API_KEY=... to local.properties (key from aistudio.google.com).
+        buildConfigField(
+            "String",
+            "GEMINI_API_KEY",
+            "\"${localProperties.getProperty("GEMINI_API_KEY") ?: ""}\""
+        )
     }
 
     buildTypes {
@@ -71,4 +87,15 @@ dependencies {
 
     // DataStore (persist limit + daily stats)
     implementation(libs.androidx.datastore.preferences)
+
+    // Room (books, verified page reads, points ledger)
+    implementation(libs.androidx.room.runtime)
+    implementation(libs.androidx.room.ktx)
+    ksp(libs.androidx.room.compiler)
+
+    // Navigation
+    implementation(libs.androidx.navigation.compose)
+
+    // OkHttp (quiz generation via LLM API)
+    implementation(libs.okhttp)
 }

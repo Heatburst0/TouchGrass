@@ -5,6 +5,7 @@ import android.content.Intent
 import android.view.accessibility.AccessibilityEvent
 import com.example.touchgrass.core.analyzer.NodeTreeAnalyzer
 import com.example.touchgrass.core.manager.ShortsTrackerManager
+import com.example.touchgrass.core.screentime.ScreenTimeNudger
 import com.example.touchgrass.presentation.blockerView.BlockerActivity
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
@@ -28,6 +29,9 @@ class InspectorService : AccessibilityService() {
 
     @Inject
     lateinit var trackerManager: ShortsTrackerManager
+
+    @Inject
+    lateinit var screenTimeNudger: ScreenTimeNudger
     private var lastAnalysisTime = 0L
 
     companion object {
@@ -74,7 +78,15 @@ class InspectorService : AccessibilityService() {
 
         // 2. PACKAGE CHECK
         val packageName = event.packageName?.toString() ?: return
-        if (packageName != "com.google.android.youtube" && packageName != "com.instagram.android") {
+        if (packageName !in ScreenTimeNudger.WATCHED_PACKAGES) {
+            return
+        }
+
+        // Piggyback the screen-time nudge check on the event stream (self-throttled)
+        screenTimeNudger.maybeNudge()
+
+        // Netflix is watch-time-only; no Shorts UI to analyze there
+        if (packageName == "com.netflix.mediaclient") {
             return
         }
 

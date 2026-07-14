@@ -4,9 +4,11 @@ import android.view.accessibility.AccessibilityNodeInfo
 import com.example.touchgrass.core.analyzer.YouTubeShortsDetector
 import com.example.touchgrass.core.data.SettingsRepository
 import com.example.touchgrass.core.model.ScreenState
+import com.example.touchgrass.core.rewards.RewardsManager
 import com.example.touchgrass.di.ApplicationScope
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -33,13 +35,20 @@ data class ShortsStats(
 class ShortsTrackerManager @Inject constructor(
     private val detector: YouTubeShortsDetector,
     private val settings: SettingsRepository,
+    private val rewards: RewardsManager,
     @ApplicationScope private val scope: CoroutineScope
 ) {
     private val _stats = MutableStateFlow(ShortsStats())
     val stats: StateFlow<ShortsStats> = _stats.asStateFlow()
 
+    /** Base daily limit set by the user. */
     val shortsLimit: StateFlow<Int> = settings.shortsLimit
         .stateIn(scope, SharingStarted.Eagerly, SettingsRepository.DEFAULT_LIMIT)
+
+    /** What actually gates blocking: base limit + shorts earned back via reading. */
+    val effectiveLimit: StateFlow<Int> =
+        combine(shortsLimit, rewards.extraShortsToday) { base, extra -> base + extra }
+            .stateIn(scope, SharingStarted.Eagerly, SettingsRepository.DEFAULT_LIMIT)
 
     private val _triggerBlockEvent = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
     val triggerBlockEvent = _triggerBlockEvent.asSharedFlow()
@@ -90,7 +99,7 @@ class ShortsTrackerManager @Inject constructor(
                 }
 
                 // Re-fires (with a cooldown) if the user sneaks back into Shorts after a block.
-                if (_stats.value.totalCount >= shortsLimit.value) {
+                if (_stats.value.totalCount >= effectiveLimit.value) {
                     maybeTriggerBlock(now)
                 }
                 persist()

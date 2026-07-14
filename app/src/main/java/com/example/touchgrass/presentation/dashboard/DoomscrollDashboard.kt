@@ -84,6 +84,9 @@ private val CardShape = RoundedCornerShape(20.dp)
 fun DoomscrollDashboard(viewModel: DashboardViewModel) {
     val stats by viewModel.stats.collectAsState()
     val limit by viewModel.shortsLimit.collectAsState()
+    val effectiveLimit by viewModel.effectiveLimit.collectAsState()
+    val extraShorts by viewModel.extraShortsToday.collectAsState()
+    val points by viewModel.pointsBalance.collectAsState()
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
 
@@ -105,7 +108,7 @@ fun DoomscrollDashboard(viewModel: DashboardViewModel) {
     }
 
     val totalMinutes = TimeUnit.MILLISECONDS.toMinutes(stats.totalTimeMillis)
-    val limitReached = stats.totalCount >= limit
+    val limitReached = stats.totalCount >= effectiveLimit
     val setupIncomplete = !isServiceActive || !canDrawOverlays || !batteryExempt
 
     Column(
@@ -148,11 +151,11 @@ fun DoomscrollDashboard(viewModel: DashboardViewModel) {
         Spacer(Modifier.height(20.dp))
 
         // ---- Hero progress ring ----
-        HeroRing(count = stats.totalCount, limit = limit)
+        HeroRing(count = stats.totalCount, limit = effectiveLimit)
 
         Spacer(Modifier.height(4.dp))
 
-        val remaining = (limit - stats.totalCount).coerceAtLeast(0)
+        val remaining = (effectiveLimit - stats.totalCount).coerceAtLeast(0)
         Text(
             text = if (limitReached) "LIMIT REACHED - SHORTS ARE BLOCKED"
             else "$remaining left before lockout",
@@ -162,6 +165,16 @@ fun DoomscrollDashboard(viewModel: DashboardViewModel) {
             letterSpacing = if (limitReached) 1.sp else 0.sp
         )
 
+        if (extraShorts > 0) {
+            Spacer(Modifier.height(2.dp))
+            Text(
+                text = "includes +$extraShorts earned by reading",
+                color = GrassGreen,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Medium
+            )
+        }
+
         Spacer(Modifier.height(24.dp))
 
         // ---- Stat tiles ----
@@ -170,15 +183,21 @@ fun DoomscrollDashboard(viewModel: DashboardViewModel) {
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             StatTile(
-                label = "Time wasted today",
+                label = "Time wasted",
                 value = formatDuration(stats.totalTimeMillis),
                 accent = AmberWarn,
                 modifier = Modifier.weight(1f)
             )
             StatTile(
-                label = "Avg per short",
+                label = "Avg / short",
                 value = "${stats.averageTimeSeconds}s",
                 accent = GrassGreen,
+                modifier = Modifier.weight(1f)
+            )
+            StatTile(
+                label = "Points",
+                value = "$points",
+                accent = TextPrimary,
                 modifier = Modifier.weight(1f)
             )
         }
