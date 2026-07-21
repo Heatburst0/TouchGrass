@@ -86,6 +86,7 @@ fun DoomscrollDashboard(viewModel: DashboardViewModel) {
     val limit by viewModel.shortsLimit.collectAsState()
     val effectiveLimit by viewModel.effectiveLimit.collectAsState()
     val extraShorts by viewModel.extraShortsToday.collectAsState()
+    val penaltyShorts by viewModel.penaltyShortsToday.collectAsState()
     val points by viewModel.pointsBalance.collectAsState()
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -170,6 +171,16 @@ fun DoomscrollDashboard(viewModel: DashboardViewModel) {
             Text(
                 text = "includes +$extraShorts earned by reading",
                 color = GrassGreen,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Medium
+            )
+        }
+
+        if (penaltyShorts > 0) {
+            Spacer(Modifier.height(2.dp))
+            Text(
+                text = "-$penaltyShorts docked for a missed goal",
+                color = DangerRed,
                 fontSize = 12.sp,
                 fontWeight = FontWeight.Medium
             )

@@ -2,6 +2,7 @@ package com.example.touchgrass.presentation.navigation
 
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.Icon
@@ -28,6 +29,7 @@ import com.example.touchgrass.features.reading.ui.LibraryScreen
 import com.example.touchgrass.features.reading.ui.QuizSessionScreen
 import com.example.touchgrass.features.reading.ui.ReaderScreen
 import com.example.touchgrass.presentation.dashboard.DoomscrollDashboard
+import com.example.touchgrass.presentation.goals.GoalsScreen
 import com.example.touchgrass.presentation.tools.ToolsHubScreen
 import com.example.touchgrass.ui.theme.GrassGreen
 import com.example.touchgrass.ui.theme.Ink
@@ -37,6 +39,7 @@ import com.example.touchgrass.ui.theme.TextSecondary
 
 object Routes {
     const val GUARD = "guard"
+    const val GOALS = "goals"
     const val TOOLS = "tools"
     const val LIBRARY = "library"
     const val READER = "reader/{bookId}"
@@ -49,6 +52,7 @@ private data class BottomTab(val route: String, val label: String, val icon: Ima
 
 private val BOTTOM_TABS = listOf(
     BottomTab(Routes.GUARD, "Guard", Icons.Filled.Home),
+    BottomTab(Routes.GOALS, "Goals", Icons.Filled.CheckCircle),
     BottomTab(Routes.TOOLS, "Tools", Icons.Filled.Star)
 )
 
@@ -63,7 +67,7 @@ fun TouchGrassAppRoot(startRoute: String? = null) {
 
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route
-    val showBottomBar = currentRoute == Routes.GUARD || currentRoute == Routes.TOOLS
+    val showBottomBar = currentRoute in setOf(Routes.GUARD, Routes.GOALS, Routes.TOOLS)
 
     Scaffold(
         containerColor = Ink,
@@ -104,6 +108,9 @@ fun TouchGrassAppRoot(startRoute: String? = null) {
         ) {
             composable(Routes.GUARD) {
                 DoomscrollDashboard(viewModel = hiltViewModel())
+            }
+            composable(Routes.GOALS) {
+                GoalsScreen()
             }
             composable(Routes.TOOLS) {
                 ToolsHubScreen(onOpenRoute = { navController.navigate(it) })

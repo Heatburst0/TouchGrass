@@ -55,6 +55,8 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.touchgrass.core.goals.GoalEngine
+import com.example.touchgrass.core.goals.PillarType
 import com.example.touchgrass.core.rewards.RewardsManager
 import com.example.touchgrass.features.reading.data.BookRepository
 import com.example.touchgrass.features.reading.quiz.QuizGenerationException
@@ -109,6 +111,7 @@ class QuizSessionViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
     private val repo: BookRepository,
     private val rewards: RewardsManager,
+    private val goalEngine: GoalEngine,
     private val quizGenerator: QuizGenerator
 ) : ViewModel() {
 
@@ -198,6 +201,7 @@ class QuizSessionViewModel @Inject constructor(
                 credited = pages.size
                 pages.forEach { rewards.awardPageRead(bookId, it) }
                 earned = credited * RewardsManager.POINTS_PER_PAGE
+                goalEngine.recordProgress(PillarType.READING, credited)
                 // Session photos are consumed once credited
                 withContext(Dispatchers.IO) { state.photos.forEach(File::delete) }
             }
@@ -318,18 +322,28 @@ fun QuizSessionScreen(
                 )
             }
 
-            is QuizPhase.Quiz -> QuizContent(
-                questions = phase.questions,
-                answers = state.answers,
-                onSelect = viewModel::selectAnswer,
-                onSubmit = viewModel::submit
-            )
+            is QuizPhase.Quiz -> Column {
+                QuizQuestionsView(
+                    questions = phase.questions,
+                    answers = state.answers,
+                    onSelect = viewModel::selectAnswer,
+                    onSubmit = viewModel::submit
+                )
+            }
 
-            is QuizPhase.Result -> ResultContent(
-                result = phase,
-                onRetry = viewModel::retry,
-                onNewSession = viewModel::startNewSession,
-                onDone = onDone
+            is QuizPhase.Result -> QuizResultView(
+                correct = phase.correct,
+                total = phase.total,
+                passed = phase.passed,
+                detail = if (phase.passed)
+                    "${phase.pagesCredited} page${if (phase.pagesCredited == 1) "" else "s"} credited  ·  +${phase.pointsEarned} pts"
+                else "Re-read the pages, then take a fresh quiz.",
+                primaryLabel = if (phase.passed) "Log more pages" else "Take a new quiz",
+                onPrimary = {
+                    if (phase.passed) viewModel.startNewSession() else viewModel.retry()
+                },
+                secondaryLabel = if (phase.passed) "Back to library" else null,
+                onSecondary = if (phase.passed) onDone else null
             )
         }
     }
@@ -436,164 +450,6 @@ private fun PhotoThumbnail(file: File, onRemove: () -> Unit) {
             contentAlignment = Alignment.Center
         ) {
             Text("x", color = TextPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-        }
-    }
-}
-
-@Composable
-private fun QuizContent(
-    questions: List<QuizQuestion>,
-    answers: Map<Int, Int>,
-    onSelect: (Int, Int) -> Unit,
-    onSubmit: () -> Unit
-) {
-    Text(
-        text = "Answer from what you just read - no peeking.",
-        color = TextSecondary,
-        fontSize = 13.sp
-    )
-    Spacer(Modifier.height(16.dp))
-
-    questions.forEachIndexed { qIndex, question ->
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(16.dp))
-                .background(InkElevated)
-                .border(1.dp, InkBorder, RoundedCornerShape(16.dp))
-                .padding(16.dp)
-        ) {
-            Text(
-                text = "${qIndex + 1}. ${question.question}",
-                color = TextPrimary,
-                fontSize = 15.sp,
-                fontWeight = FontWeight.SemiBold,
-                lineHeight = 21.sp
-            )
-            Spacer(Modifier.height(12.dp))
-            question.options.forEachIndexed { oIndex, option ->
-                val selected = answers[qIndex] == oIndex
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 3.dp)
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(if (selected) GrassGreen.copy(alpha = 0.12f) else Ink)
-                        .border(
-                            1.dp,
-                            if (selected) GrassGreen else InkBorder,
-                            RoundedCornerShape(10.dp)
-                        )
-                        .clickable { onSelect(qIndex, oIndex) }
-                        .padding(horizontal = 12.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(16.dp)
-                            .clip(CircleShape)
-                            .border(2.dp, if (selected) GrassGreen else TextSecondary, CircleShape)
-                            .background(if (selected) GrassGreen else Ink)
-                    )
-                    Spacer(Modifier.width(10.dp))
-                    Text(
-                        text = option,
-                        color = if (selected) TextPrimary else TextSecondary,
-                        fontSize = 14.sp,
-                        lineHeight = 19.sp
-                    )
-                }
-            }
-        }
-        Spacer(Modifier.height(12.dp))
-    }
-
-    Button(
-        onClick = onSubmit,
-        enabled = answers.size == questions.size,
-        modifier = Modifier.fillMaxWidth().height(54.dp),
-        shape = RoundedCornerShape(16.dp),
-        colors = ButtonDefaults.buttonColors(
-            containerColor = GrassGreen,
-            contentColor = Ink,
-            disabledContainerColor = InkBorder,
-            disabledContentColor = TextSecondary
-        )
-    ) {
-        Text(
-            text = if (answers.size < questions.size)
-                "Answer all ${questions.size} questions" else "Submit answers",
-            fontSize = 16.sp,
-            fontWeight = FontWeight.Bold
-        )
-    }
-}
-
-@Composable
-private fun ResultContent(
-    result: QuizPhase.Result,
-    onRetry: () -> Unit,
-    onNewSession: () -> Unit,
-    onDone: () -> Unit
-) {
-    Column(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 32.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Text(
-            text = "${result.correct}/${result.total}",
-            color = if (result.passed) GrassGreen else DangerRed,
-            fontSize = 56.sp,
-            fontWeight = FontWeight.Black
-        )
-        Spacer(Modifier.height(8.dp))
-        Text(
-            text = if (result.passed) "Verified. You actually read it."
-            else "Not quite - that didn't look like a careful read.",
-            color = TextPrimary,
-            fontSize = 17.sp,
-            fontWeight = FontWeight.SemiBold,
-            textAlign = TextAlign.Center
-        )
-        Spacer(Modifier.height(8.dp))
-        Text(
-            text = if (result.passed)
-                "${result.pagesCredited} page${if (result.pagesCredited == 1) "" else "s"} credited  ·  +${result.pointsEarned} pts"
-            else "Re-read the pages, then take a fresh quiz.",
-            color = if (result.passed) GrassGreen else TextSecondary,
-            fontSize = 14.sp,
-            textAlign = TextAlign.Center
-        )
-
-        Spacer(Modifier.height(32.dp))
-
-        if (result.passed) {
-            Button(
-                onClick = onNewSession,
-                modifier = Modifier.fillMaxWidth().height(52.dp),
-                shape = RoundedCornerShape(16.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = GrassGreen, contentColor = Ink)
-            ) {
-                Text("Log more pages", fontSize = 15.sp, fontWeight = FontWeight.Bold)
-            }
-            Spacer(Modifier.height(10.dp))
-            Button(
-                onClick = onDone,
-                modifier = Modifier.fillMaxWidth().height(52.dp),
-                shape = RoundedCornerShape(16.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = InkElevated, contentColor = TextPrimary)
-            ) {
-                Text("Back to library", fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
-            }
-        } else {
-            Button(
-                onClick = onRetry,
-                modifier = Modifier.fillMaxWidth().height(52.dp),
-                shape = RoundedCornerShape(16.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = GrassGreen, contentColor = Ink)
-            ) {
-                Text("Take a new quiz", fontSize = 15.sp, fontWeight = FontWeight.Bold)
-            }
         }
     }
 }

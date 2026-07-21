@@ -6,20 +6,83 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
-    entities = [BookEntity::class, PageReadEntity::class, PointsEntryEntity::class],
-    version = 2,
+    entities = [
+        BookEntity::class,
+        PageReadEntity::class,
+        PointsEntryEntity::class,
+        CommitmentEntity::class,
+        GitHubGoalEntity::class
+    ],
+    version = 5,
     exportSchema = false
 )
 abstract class TouchGrassDatabase : RoomDatabase() {
     abstract fun bookDao(): BookDao
     abstract fun pageReadDao(): PageReadDao
     abstract fun pointsDao(): PointsDao
+    abstract fun commitmentDao(): CommitmentDao
+    abstract fun gitHubGoalDao(): GitHubGoalDao
 
     companion object {
         /** v2: physical (paper) books with AI quiz verification. */
         val MIGRATION_1_2 = object : Migration(1, 2) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE books ADD COLUMN type TEXT NOT NULL DEFAULT 'PDF'")
+            }
+        }
+
+        /** v3: quiz gating for PDFs — pages start unverified, quiz pays out.
+         *  Existing rows default to verified so already-earned pages keep counting. */
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE page_reads ADD COLUMN verified INTEGER NOT NULL DEFAULT 1")
+            }
+        }
+
+        /** v5: recurring GitHub daily-commit goals, verified via the API. */
+        val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `github_goals` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `owner` TEXT NOT NULL,
+                        `repo` TEXT NOT NULL,
+                        `author` TEXT NOT NULL,
+                        `createdDate` TEXT NOT NULL,
+                        `lastSuccessDate` TEXT,
+                        `lastSettledDate` TEXT,
+                        `currentStreak` INTEGER NOT NULL,
+                        `bestStreak` INTEGER NOT NULL,
+                        `rewardPoints` INTEGER NOT NULL,
+                        `penaltyShorts` INTEGER NOT NULL,
+                        `active` INTEGER NOT NULL
+                    )
+                    """.trimIndent()
+                )
+            }
+        }
+
+        /** v4: commitments — verified pledges with a reward/penalty stake. */
+        val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `commitments` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `pillar` TEXT NOT NULL,
+                        `title` TEXT NOT NULL,
+                        `targetAmount` INTEGER NOT NULL,
+                        `unitLabel` TEXT NOT NULL,
+                        `progress` INTEGER NOT NULL,
+                        `createdAt` INTEGER NOT NULL,
+                        `deadlineAt` INTEGER NOT NULL,
+                        `rewardPoints` INTEGER NOT NULL,
+                        `penaltyShorts` INTEGER NOT NULL,
+                        `status` TEXT NOT NULL
+                    )
+                    """.trimIndent()
+                )
             }
         }
     }

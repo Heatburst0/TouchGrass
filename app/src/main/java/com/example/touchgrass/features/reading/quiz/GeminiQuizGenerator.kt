@@ -5,6 +5,7 @@ import android.graphics.BitmapFactory
 import android.util.Base64
 import com.example.touchgrass.BuildConfig
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -67,32 +68,105 @@ class GeminiQuizGenerator @Inject constructor() : QuizGenerator {
                     .put("temperature", 0.4)
             )
 
-        val request = Request.Builder()
-            .url("$BASE_URL/models/$MODEL:generateContent")
-            .header("x-goog-api-key", BuildConfig.GEMINI_API_KEY)
-            .post(body.toString().toRequestBody("application/json".toMediaType()))
-            .build()
+        val payload = body.toString()
 
-        val responseText = try {
-            client.newCall(request).execute().use { response ->
-                val text = response.body?.string().orEmpty()
-                if (!response.isSuccessful) {
-                    Timber.tag("Quiz").e("Gemini HTTP %d: %s", response.code, text.take(500))
-                    throw QuizGenerationException(
-                        when (response.code) {
-                            400, 401, 403 -> "The AI key was rejected. Check GEMINI_API_KEY in local.properties."
-                            429 -> "Free-tier rate limit hit. Try again in a minute."
-                            else -> "Quiz service failed (HTTP ${response.code}). Try again."
-                        }
-                    )
+        // Free-tier model availability shifts as Google deprecates models
+        // (e.g. gemini-2.0-flash now has a free-tier limit of 0). Walk the
+        // list until one answers instead of hard-coding a single model.
+        var lastFailure: QuizGenerationException? = null
+        for (model in MODELS) {
+            when (val outcome = requestWithRetry(model, payload)) {
+                is Outcome.Success -> {
+                    if (model != MODELS.first()) {
+                        Timber.tag("Quiz").i("Quiz served by fallback model %s", model)
+                    }
+                    return@withContext parseQuestions(outcome.body, questionCount)
                 }
-                text
+                is Outcome.TryNextModel -> lastFailure = outcome.failure
+                is Outcome.Fatal -> throw outcome.failure
             }
-        } catch (e: IOException) {
-            throw QuizGenerationException("No connection to the quiz service. Check your internet.", e)
         }
+        throw lastFailure ?: QuizGenerationException("Quiz service unavailable. Try again later.")
+    }
 
-        parseQuestions(responseText, questionCount)
+    private sealed interface Outcome {
+        data class Success(val body: String) : Outcome
+        data class TryNextModel(val failure: QuizGenerationException) : Outcome
+        data class Fatal(val failure: QuizGenerationException) : Outcome
+    }
+
+    /**
+     * Calls one model, retrying transient overloads (503/500) with exponential
+     * backoff. Quota/retired errors (429/404) fall through to the next model;
+     * bad-key errors (400/401/403) are fatal.
+     */
+    private suspend fun requestWithRetry(model: String, payload: String): Outcome {
+        var overloadFailure: QuizGenerationException? = null
+        repeat(MAX_RETRIES) { attempt ->
+            val request = Request.Builder()
+                .url("$BASE_URL/models/$model:generateContent")
+                .header("x-goog-api-key", BuildConfig.GEMINI_API_KEY)
+                .post(payload.toRequestBody("application/json".toMediaType()))
+                .build()
+
+            try {
+                client.newCall(request).execute().use { response ->
+                    val text = response.body?.string().orEmpty()
+                    when {
+                        response.isSuccessful -> return Outcome.Success(text)
+
+                        // Temporarily overloaded / server error → retry same model
+                        response.code == 503 || response.code == 500 -> {
+                            Timber.tag("Quiz").w(
+                                "Model %s overloaded (HTTP %d), attempt %d/%d",
+                                model, response.code, attempt + 1, MAX_RETRIES
+                            )
+                            overloadFailure = QuizGenerationException(
+                                "The quiz service is busy right now. Please try again in a moment."
+                            )
+                        }
+
+                        // Quota zeroed / model retired / rate limited → next model
+                        response.code == 429 || response.code == 404 -> {
+                            Timber.tag("Quiz").w(
+                                "Model %s unavailable (HTTP %d): %s",
+                                model, response.code, text.take(300)
+                            )
+                            return Outcome.TryNextModel(
+                                QuizGenerationException(
+                                    "Free-tier quota is unavailable right now (tried " +
+                                            "${MODELS.joinToString()}). Check ai.dev/rate-limit " +
+                                            "or try again later."
+                                )
+                            )
+                        }
+
+                        response.code == 400 || response.code == 401 || response.code == 403 ->
+                            return Outcome.Fatal(
+                                QuizGenerationException(
+                                    "The AI key was rejected. Check GEMINI_API_KEY in local.properties."
+                                )
+                            )
+
+                        else -> return Outcome.Fatal(
+                            QuizGenerationException("Quiz service failed (HTTP ${response.code}). Try again.")
+                        )
+                    }
+                }
+            } catch (e: IOException) {
+                Timber.tag("Quiz").w(e, "Network error on %s, attempt %d/%d", model, attempt + 1, MAX_RETRIES)
+                overloadFailure = QuizGenerationException(
+                    "No connection to the quiz service. Check your internet.", e
+                )
+            }
+
+            // Backoff before the next attempt (skip the wait after the last one)
+            if (attempt < MAX_RETRIES - 1) delay(BASE_BACKOFF_MS * (1L shl attempt))
+        }
+        // Exhausted retries on this model — let the caller try the next one
+        return Outcome.TryNextModel(
+            overloadFailure ?: QuizGenerationException("Quiz service unavailable. Try again later.")
+        )
     }
 
     private fun buildPrompt(questionCount: Int) = """
@@ -176,8 +250,20 @@ class GeminiQuizGenerator @Inject constructor() : QuizGenerator {
 
     companion object {
         private const val BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
-        private const val MODEL = "gemini-2.0-flash"
+
+        /**
+         * Tried in order; first model that answers wins. All multimodal.
+         * We lead with the "-latest" ALIASES because pinned versions
+         * (e.g. gemini-2.5-flash) get gated to "no longer available to new
+         * users" 404s, while the aliases always resolve to a current model.
+         */
+        private val MODELS = listOf(
+            "gemini-flash-latest",
+            "gemini-flash-lite-latest"
+        )
         private const val MAX_DIMENSION_PX = 1536
         private const val JPEG_QUALITY = 80
+        private const val MAX_RETRIES = 3          // per model, for 503/500/network
+        private const val BASE_BACKOFF_MS = 1500L  // 1.5s, 3s between retries
     }
 }

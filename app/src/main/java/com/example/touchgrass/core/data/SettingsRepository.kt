@@ -3,6 +3,7 @@ package com.example.touchgrass.core.data
 import android.content.Context
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
@@ -38,6 +39,11 @@ class SettingsRepository @Inject constructor(
         val EXTRA_SHORTS_COUNT = intPreferencesKey("extra_shorts_count")
         val NUDGE_DAY = stringPreferencesKey("nudge_day")
         val NUDGE_BUCKET = intPreferencesKey("nudge_bucket")
+        val READING_GATE_ENABLED = booleanPreferencesKey("reading_gate_enabled")
+        val READING_GATE_PENDING = booleanPreferencesKey("reading_gate_pending")
+        val PENALTY_SHORTS_DAY = stringPreferencesKey("penalty_shorts_day")
+        val PENALTY_SHORTS_COUNT = intPreferencesKey("penalty_shorts_count")
+        val GITHUB_TOKEN = stringPreferencesKey("github_token")
     }
 
     val shortsLimit: Flow<Int> = context.dataStore.data
@@ -98,6 +104,53 @@ class SettingsRepository @Inject constructor(
             it[Keys.NUDGE_DAY] = dayKey
             it[Keys.NUDGE_BUCKET] = bucket
         }
+    }
+
+    // ---- Penalty shorts (missed-commitment punishment; day-scoped) ----
+
+    val penaltyShortsToday: Flow<Int> = context.dataStore.data.map {
+        if (it[Keys.PENALTY_SHORTS_DAY] == LocalDate.now().toString()) {
+            it[Keys.PENALTY_SHORTS_COUNT] ?: 0
+        } else 0
+    }
+
+    suspend fun addPenaltyShorts(amount: Int) {
+        context.dataStore.edit {
+            val today = LocalDate.now().toString()
+            if (it[Keys.PENALTY_SHORTS_DAY] != today) {
+                it[Keys.PENALTY_SHORTS_DAY] = today
+                it[Keys.PENALTY_SHORTS_COUNT] = amount
+            } else {
+                it[Keys.PENALTY_SHORTS_COUNT] = (it[Keys.PENALTY_SHORTS_COUNT] ?: 0) + amount
+            }
+        }
+    }
+
+    // ---- GitHub (optional PAT for private repos / higher rate limit) ----
+
+    val githubToken: Flow<String> = context.dataStore.data
+        .map { it[Keys.GITHUB_TOKEN] ?: "" }
+
+    suspend fun setGithubToken(token: String) {
+        context.dataStore.edit { it[Keys.GITHUB_TOKEN] = token.trim() }
+    }
+
+    // ---- Force-read gate (screen-time balance) ----
+
+    /** User opted into hard-blocking watch apps until a page is verified. */
+    val readingGateEnabled: Flow<Boolean> = context.dataStore.data
+        .map { it[Keys.READING_GATE_ENABLED] ?: false }
+
+    /** A gate is currently owed — watch apps stay blocked until cleared. */
+    val readingGatePending: Flow<Boolean> = context.dataStore.data
+        .map { it[Keys.READING_GATE_PENDING] ?: false }
+
+    suspend fun setReadingGateEnabled(enabled: Boolean) {
+        context.dataStore.edit { it[Keys.READING_GATE_ENABLED] = enabled }
+    }
+
+    suspend fun setReadingGatePending(pending: Boolean) {
+        context.dataStore.edit { it[Keys.READING_GATE_PENDING] = pending }
     }
 
     companion object {

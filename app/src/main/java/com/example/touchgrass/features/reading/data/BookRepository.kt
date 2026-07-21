@@ -29,7 +29,11 @@ class BookRepository @Inject constructor(
 
     suspend fun getBook(id: Long): BookEntity? = bookDao.get(id)
 
-    fun readPages(bookId: Long): Flow<List<Int>> = pageReadDao.readPages(bookId)
+    /** Quiz-verified pages — the only ones worth points. */
+    fun verifiedPages(bookId: Long): Flow<List<Int>> = pageReadDao.verifiedPages(bookId)
+
+    /** Dwell-read pages awaiting quiz verification. */
+    fun pendingPages(bookId: Long): Flow<List<Int>> = pageReadDao.pendingPages(bookId)
 
     /**
      * Imports a picked PDF: copies it into private storage (no lingering URI
@@ -95,11 +99,23 @@ class BookRepository @Inject constructor(
 
     suspend fun saveLastPage(bookId: Long, page: Int) = bookDao.updateLastPage(bookId, page)
 
-    /** Records a verified page read. Returns false if that page was already credited. */
-    suspend fun creditPage(bookId: Long, pageIndex: Int): Boolean =
+    /**
+     * Records a dwell-read page as PENDING (unverified — no points yet).
+     * Returns false if the page already has a row (pending or verified).
+     */
+    suspend fun markPagePending(bookId: Long, pageIndex: Int): Boolean =
         pageReadDao.insertIgnore(
-            PageReadEntity(bookId = bookId, pageIndex = pageIndex, readAt = System.currentTimeMillis())
+            PageReadEntity(
+                bookId = bookId,
+                pageIndex = pageIndex,
+                readAt = System.currentTimeMillis(),
+                verified = false
+            )
         ) != -1L
+
+    /** Flips quiz-passed pages to verified; caller awards the points. */
+    suspend fun verifyPages(bookId: Long, pages: List<Int>) =
+        pageReadDao.markVerified(bookId, pages)
 
     private fun displayName(uri: Uri): String? =
         context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)

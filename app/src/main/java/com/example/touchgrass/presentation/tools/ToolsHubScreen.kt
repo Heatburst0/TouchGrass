@@ -21,6 +21,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -42,6 +44,8 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.viewModelScope
+import com.example.touchgrass.core.data.SettingsRepository
 import com.example.touchgrass.core.rewards.RewardsManager
 import com.example.touchgrass.features.reading.ui.PointsChip
 import com.example.touchgrass.hasUsageAccess
@@ -54,7 +58,10 @@ import com.example.touchgrass.ui.theme.InkElevated
 import com.example.touchgrass.ui.theme.TextPrimary
 import com.example.touchgrass.ui.theme.TextSecondary
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 /**
@@ -97,9 +104,21 @@ val PRODUCTIVITY_TOOLS = listOf(
 
 @HiltViewModel
 class ToolsHubViewModel @Inject constructor(
-    rewards: RewardsManager
+    rewards: RewardsManager,
+    private val settings: SettingsRepository
 ) : ViewModel() {
     val points: StateFlow<Int> = rewards.pointsBalance
+
+    val forceReadEnabled: StateFlow<Boolean> = settings.readingGateEnabled
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
+
+    fun setForceRead(enabled: Boolean) {
+        viewModelScope.launch {
+            settings.setReadingGateEnabled(enabled)
+            // Turning it off also disarms any gate currently owed
+            if (!enabled) settings.setReadingGatePending(false)
+        }
+    }
 }
 
 @Composable
@@ -108,6 +127,7 @@ fun ToolsHubScreen(
     viewModel: ToolsHubViewModel = hiltViewModel()
 ) {
     val points by viewModel.points.collectAsState()
+    val forceRead by viewModel.forceReadEnabled.collectAsState()
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
 
@@ -170,6 +190,44 @@ fun ToolsHubScreen(
                 extraContent = if (tool.id == "nudges") {
                     {
                         Spacer(Modifier.height(12.dp))
+                        // Force-read mode: PDF takes over the screen instead of a notification
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(Ink)
+                                .border(1.dp, InkBorder, RoundedCornerShape(12.dp))
+                                .padding(horizontal = 14.dp, vertical = 8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    text = "Force-read mode",
+                                    color = TextPrimary,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                Text(
+                                    text = "Your PDF takes over the screen; watching stays blocked until you verify 1 page",
+                                    color = TextSecondary,
+                                    fontSize = 11.sp,
+                                    lineHeight = 14.sp
+                                )
+                            }
+                            Spacer(Modifier.width(8.dp))
+                            Switch(
+                                checked = forceRead,
+                                onCheckedChange = viewModel::setForceRead,
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = Ink,
+                                    checkedTrackColor = GrassGreen,
+                                    uncheckedThumbColor = TextSecondary,
+                                    uncheckedTrackColor = InkBorder
+                                )
+                            )
+                        }
+                        Spacer(Modifier.height(8.dp))
                         PermissionRow(
                             label = "Usage access",
                             granted = usageAccess,

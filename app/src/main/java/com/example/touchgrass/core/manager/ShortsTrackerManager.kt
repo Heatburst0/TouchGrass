@@ -45,10 +45,18 @@ class ShortsTrackerManager @Inject constructor(
     val shortsLimit: StateFlow<Int> = settings.shortsLimit
         .stateIn(scope, SharingStarted.Eagerly, SettingsRepository.DEFAULT_LIMIT)
 
-    /** What actually gates blocking: base limit + shorts earned back via reading. */
+    /**
+     * What actually gates blocking: base limit + shorts earned back by reading
+     * − shorts docked for missed commitments (floored at 0).
+     */
     val effectiveLimit: StateFlow<Int> =
-        combine(shortsLimit, rewards.extraShortsToday) { base, extra -> base + extra }
-            .stateIn(scope, SharingStarted.Eagerly, SettingsRepository.DEFAULT_LIMIT)
+        combine(
+            shortsLimit,
+            rewards.extraShortsToday,
+            rewards.penaltyShortsToday
+        ) { base, extra, penalty ->
+            (base + extra - penalty).coerceAtLeast(0)
+        }.stateIn(scope, SharingStarted.Eagerly, SettingsRepository.DEFAULT_LIMIT)
 
     private val _triggerBlockEvent = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
     val triggerBlockEvent = _triggerBlockEvent.asSharedFlow()

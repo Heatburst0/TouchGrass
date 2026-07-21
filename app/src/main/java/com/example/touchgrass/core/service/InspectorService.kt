@@ -85,6 +85,9 @@ class InspectorService : AccessibilityService() {
         // Piggyback the screen-time nudge check on the event stream (self-throttled)
         screenTimeNudger.maybeNudge()
 
+        // Force-read mode: while a reading gate is owed, watched apps stay blocked
+        screenTimeNudger.enforceGate()
+
         // Netflix is watch-time-only; no Shorts UI to analyze there
         if (packageName == "com.netflix.mediaclient") {
             return

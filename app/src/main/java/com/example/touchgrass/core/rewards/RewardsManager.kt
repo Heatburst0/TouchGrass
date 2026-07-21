@@ -32,6 +32,17 @@ class RewardsManager @Inject constructor(
     val extraShortsToday: StateFlow<Int> = settings.extraShortsToday
         .stateIn(scope, SharingStarted.Eagerly, 0)
 
+    /** Shorts docked today for missed commitments (subtracted from the limit). */
+    val penaltyShortsToday: StateFlow<Int> = settings.penaltyShortsToday
+        .stateIn(scope, SharingStarted.Eagerly, 0)
+
+    /** Punishment currency: shrink today's entertainment allowance. */
+    suspend fun applyPenaltyShorts(amount: Int) {
+        if (amount <= 0) return
+        settings.addPenaltyShorts(amount)
+        Timber.tag("Rewards").i("Penalty: -%d shorts today", amount)
+    }
+
     suspend fun award(points: Int, reason: String) {
         pointsDao.insert(
             PointsEntryEntity(delta = points, reason = reason, createdAt = System.currentTimeMillis())
@@ -41,6 +52,8 @@ class RewardsManager @Inject constructor(
 
     suspend fun awardPageRead(bookId: Long, pageIndex: Int) {
         award(POINTS_PER_PAGE, "page_read:$bookId:$pageIndex")
+        // A quiz-verified page satisfies the force-read gate, if one is owed
+        settings.setReadingGatePending(false)
     }
 
     /** Trades [SHORTS_UNLOCK_COST] points for [SHORTS_UNLOCK_AMOUNT] extra shorts today. */

@@ -47,6 +47,12 @@
             android:excludeFromRecents="true"
             android:launchMode="singleTask"
             android:theme="@style/Theme.TouchGrass" />
+        <activity
+            android:name=".presentation.gate.ReadingGateActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:launchMode="singleTask"
+            android:theme="@style/Theme.TouchGrass" />
 
         <!-- Camera capture output for quiz page photos -->
         <provider
