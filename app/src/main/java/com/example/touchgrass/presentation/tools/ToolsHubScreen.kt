@@ -112,6 +112,9 @@ class ToolsHubViewModel @Inject constructor(
     val forceReadEnabled: StateFlow<Boolean> = settings.readingGateEnabled
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
 
+    val nudgeIntervalMinutes: StateFlow<Int> = settings.nudgeIntervalMinutes
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), SettingsRepository.DEFAULT_NUDGE_MINUTES)
+
     fun setForceRead(enabled: Boolean) {
         viewModelScope.launch {
             settings.setReadingGateEnabled(enabled)
@@ -119,7 +122,14 @@ class ToolsHubViewModel @Inject constructor(
             if (!enabled) settings.setReadingGatePending(false)
         }
     }
+
+    fun setNudgeInterval(minutes: Int) {
+        viewModelScope.launch { settings.setNudgeIntervalMinutes(minutes) }
+    }
 }
+
+/** Interval choices offered in the UI: label -> minutes of watch time. */
+private val NUDGE_INTERVAL_CHOICES = listOf("30m" to 30, "1h" to 60, "2h" to 120, "3h" to 180)
 
 @Composable
 fun ToolsHubScreen(
@@ -128,6 +138,7 @@ fun ToolsHubScreen(
 ) {
     val points by viewModel.points.collectAsState()
     val forceRead by viewModel.forceReadEnabled.collectAsState()
+    val nudgeInterval by viewModel.nudgeIntervalMinutes.collectAsState()
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
 
@@ -189,6 +200,36 @@ fun ToolsHubScreen(
                 onClick = { tool.route?.let(onOpenRoute) },
                 extraContent = if (tool.id == "nudges") {
                     {
+                        Spacer(Modifier.height(12.dp))
+                        // How much watch time triggers a nudge / force-read
+                        Text(
+                            text = "Remind me after every",
+                            color = TextSecondary,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Spacer(Modifier.height(6.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            NUDGE_INTERVAL_CHOICES.forEach { (label, minutes) ->
+                                val selected = nudgeInterval == minutes
+                                Text(
+                                    text = label,
+                                    color = if (selected) Ink else TextPrimary,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(50))
+                                        .background(if (selected) GrassGreen else Ink)
+                                        .border(
+                                            1.dp,
+                                            if (selected) GrassGreen else InkBorder,
+                                            RoundedCornerShape(50)
+                                        )
+                                        .clickable { viewModel.setNudgeInterval(minutes) }
+                                        .padding(horizontal = 14.dp, vertical = 7.dp)
+                                )
+                            }
+                        }
                         Spacer(Modifier.height(12.dp))
                         // Force-read mode: PDF takes over the screen instead of a notification
                         Row(

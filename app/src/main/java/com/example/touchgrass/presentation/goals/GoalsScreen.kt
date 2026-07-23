@@ -27,6 +27,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -137,6 +139,13 @@ class GoalsViewModel @Inject constructor(
     fun removeGitHubGoal(id: Long) {
         viewModelScope.launch { gitHubManager.removeGoal(id) }
     }
+
+    val goalLockEnabled: StateFlow<Boolean> = settings.goalLockEnabled
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
+
+    fun setGoalLock(enabled: Boolean) {
+        viewModelScope.launch { settings.setGoalLockEnabled(enabled) }
+    }
 }
 
 @Composable
@@ -145,6 +154,7 @@ fun GoalsScreen(viewModel: GoalsViewModel = hiltViewModel()) {
     val past by viewModel.past.collectAsState()
     val gitHubError by viewModel.gitHubError.collectAsState()
     val gitHubGoals by viewModel.gitHubGoals.collectAsState()
+    val goalLock by viewModel.goalLockEnabled.collectAsState()
     var showCreate by remember { mutableStateOf(false) }
     var showGitHub by remember { mutableStateOf(false) }
 
@@ -214,6 +224,44 @@ fun GoalsScreen(viewModel: GoalsViewModel = hiltViewModel()) {
                 ) {
                     Text("Track a repo", fontSize = 14.sp, fontWeight = FontWeight.Bold)
                 }
+            }
+            Spacer(Modifier.height(10.dp))
+            // Hard mode: block entertainment apps until today's commit is done.
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(InkElevated)
+                    .border(1.dp, InkBorder, RoundedCornerShape(12.dp))
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        text = "Hard lock",
+                        color = TextPrimary,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        text = "Block YouTube / Instagram / Netflix until you've committed to every tracked repo today",
+                        color = TextSecondary,
+                        fontSize = 11.sp,
+                        lineHeight = 14.sp
+                    )
+                }
+                Spacer(Modifier.width(8.dp))
+                Switch(
+                    checked = goalLock,
+                    onCheckedChange = viewModel::setGoalLock,
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = Ink,
+                        checkedTrackColor = GrassGreen,
+                        uncheckedThumbColor = TextSecondary,
+                        uncheckedTrackColor = InkBorder
+                    )
+                )
             }
         }
 

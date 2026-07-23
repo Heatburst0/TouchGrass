@@ -44,6 +44,8 @@ class SettingsRepository @Inject constructor(
         val PENALTY_SHORTS_DAY = stringPreferencesKey("penalty_shorts_day")
         val PENALTY_SHORTS_COUNT = intPreferencesKey("penalty_shorts_count")
         val GITHUB_TOKEN = stringPreferencesKey("github_token")
+        val NUDGE_INTERVAL_MIN = intPreferencesKey("nudge_interval_min")
+        val GOAL_LOCK_ENABLED = booleanPreferencesKey("goal_lock_enabled")
     }
 
     val shortsLimit: Flow<Int> = context.dataStore.data
@@ -126,6 +128,24 @@ class SettingsRepository @Inject constructor(
         }
     }
 
+    // ---- Screen-time nudge / force-read interval (minutes of watch time) ----
+
+    val nudgeIntervalMinutes: Flow<Int> = context.dataStore.data
+        .map { it[Keys.NUDGE_INTERVAL_MIN] ?: DEFAULT_NUDGE_MINUTES }
+
+    suspend fun setNudgeIntervalMinutes(minutes: Int) {
+        context.dataStore.edit { it[Keys.NUDGE_INTERVAL_MIN] = minutes.coerceAtLeast(15) }
+    }
+
+    // ---- Goal lock: block entertainment until today's commit is done ----
+
+    val goalLockEnabled: Flow<Boolean> = context.dataStore.data
+        .map { it[Keys.GOAL_LOCK_ENABLED] ?: false }
+
+    suspend fun setGoalLockEnabled(enabled: Boolean) {
+        context.dataStore.edit { it[Keys.GOAL_LOCK_ENABLED] = enabled }
+    }
+
     // ---- GitHub (optional PAT for private repos / higher rate limit) ----
 
     val githubToken: Flow<String> = context.dataStore.data
@@ -157,5 +177,6 @@ class SettingsRepository @Inject constructor(
         const val DEFAULT_LIMIT = 10
         const val MIN_LIMIT = 1
         const val MAX_LIMIT = 50
+        const val DEFAULT_NUDGE_MINUTES = 180
     }
 }

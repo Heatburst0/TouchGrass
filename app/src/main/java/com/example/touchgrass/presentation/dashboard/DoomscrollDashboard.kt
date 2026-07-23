@@ -88,6 +88,8 @@ fun DoomscrollDashboard(viewModel: DashboardViewModel) {
     val extraShorts by viewModel.extraShortsToday.collectAsState()
     val penaltyShorts by viewModel.penaltyShortsToday.collectAsState()
     val points by viewModel.pointsBalance.collectAsState()
+    val gitHubGoals by viewModel.gitHubGoals.collectAsState()
+    val activeCommitments by viewModel.activeCommitments.collectAsState()
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
 
@@ -214,6 +216,32 @@ fun DoomscrollDashboard(viewModel: DashboardViewModel) {
         }
 
         Spacer(Modifier.height(12.dp))
+
+        // ---- Ongoing goals ----
+        if (gitHubGoals.isNotEmpty() || activeCommitments.isNotEmpty()) {
+            SectionTitle("Ongoing goals")
+            Spacer(Modifier.height(10.dp))
+            gitHubGoals.forEach { goal ->
+                val doneToday = goal.lastSuccessDate == LocalDate.now().toString()
+                GoalRow(
+                    title = "${goal.owner}/${goal.repo}",
+                    detail = "🔥 ${goal.currentStreak}-day streak",
+                    trailing = if (doneToday) "done" else "todo",
+                    trailingOk = doneToday
+                )
+                Spacer(Modifier.height(8.dp))
+            }
+            activeCommitments.forEach { c ->
+                GoalRow(
+                    title = c.title,
+                    detail = "${c.progress}/${c.targetAmount} ${c.unitLabel}",
+                    trailing = "${c.progress * 100 / c.targetAmount.coerceAtLeast(1)}%",
+                    trailingOk = c.progress >= c.targetAmount
+                )
+                Spacer(Modifier.height(8.dp))
+            }
+            Spacer(Modifier.height(12.dp))
+        }
 
         // ---- Daily limit control (persisted via DataStore) ----
         LimitCard(
@@ -411,6 +439,38 @@ private fun StatTile(
         Text(text = value, color = accent, fontSize = 26.sp, fontWeight = FontWeight.ExtraBold)
         Spacer(Modifier.height(4.dp))
         Text(text = label, color = TextSecondary, fontSize = 12.sp)
+    }
+}
+
+@Composable
+private fun GoalRow(title: String, detail: String, trailing: String, trailingOk: Boolean) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(CardShape)
+            .background(InkElevated)
+            .border(1.dp, InkBorder, CardShape)
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                color = TextPrimary,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1
+            )
+            Text(text = detail, color = TextSecondary, fontSize = 12.sp)
+        }
+        Spacer(Modifier.width(10.dp))
+        Text(
+            text = trailing,
+            color = if (trailingOk) GrassGreen else AmberWarn,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Bold
+        )
     }
 }
 

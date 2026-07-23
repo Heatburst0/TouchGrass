@@ -4,8 +4,14 @@ import com.example.touchgrass.core.data.SettingsRepository
 import com.example.touchgrass.core.data.db.GitHubGoalDao
 import com.example.touchgrass.core.data.db.GitHubGoalEntity
 import com.example.touchgrass.core.rewards.RewardsManager
+import com.example.touchgrass.di.ApplicationScope
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.stateIn
 import timber.log.Timber
 import java.io.IOException
 import java.time.Instant
@@ -29,9 +35,22 @@ class GitHubGoalManager @Inject constructor(
     private val dao: GitHubGoalDao,
     private val api: GitHubApi,
     private val rewards: RewardsManager,
-    private val settings: SettingsRepository
+    private val settings: SettingsRepository,
+    @ApplicationScope private val scope: CoroutineScope
 ) {
     val goals: Flow<List<GitHubGoalEntity>> = dao.observeAll()
+
+    /**
+     * True when the goal-lock is on AND at least one active repo hasn't been
+     * committed to today — i.e., entertainment should be blocked. Read
+     * synchronously via `.value` from the accessibility service.
+     */
+    val entertainmentLocked: StateFlow<Boolean> =
+        combine(settings.goalLockEnabled, dao.observeAll()) { enabled, goals ->
+            if (!enabled) return@combine false
+            val today = LocalDate.now().toString()
+            goals.any { it.active && it.lastSuccessDate != today }
+        }.stateIn(scope, SharingStarted.Eagerly, false)
 
     /**
      * Validates the repo is reachable BEFORE saving. Returns null on success,

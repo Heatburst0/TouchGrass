@@ -59,7 +59,8 @@ class ScreenTimeNudger @Inject constructor(
         scope.launch {
             try {
                 val watched = todayWatchTimeMillis()
-                val bucket = (watched / NUDGE_EVERY_MS).toInt()
+                val intervalMs = settings.nudgeIntervalMinutes.first() * 60_000L
+                val bucket = (watched / intervalMs).toInt()
                 if (bucket <= 0) return@launch
 
                 val today = LocalDate.now().toString()
@@ -154,7 +155,6 @@ class ScreenTimeNudger @Inject constructor(
         const val CHANNEL_ID = "reading_nudges"
         private const val NOTIFICATION_ID = 1001
         private const val CHECK_INTERVAL_MS = 60_000L
-        private const val NUDGE_EVERY_MS = 3 * 60 * 60 * 1000L // every 3h of watch time
         private const val GATE_RELAUNCH_MS = 4_000L // re-shove cadence while gated
 
         val WATCHED_PACKAGES = setOf(

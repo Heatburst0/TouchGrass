@@ -3,9 +3,11 @@ package com.example.touchgrass.core.service
 import android.accessibilityservice.AccessibilityService
 import android.content.Intent
 import android.view.accessibility.AccessibilityEvent
+import android.widget.Toast
 import com.example.touchgrass.core.analyzer.NodeTreeAnalyzer
 import com.example.touchgrass.core.manager.ShortsTrackerManager
 import com.example.touchgrass.core.screentime.ScreenTimeNudger
+import com.example.touchgrass.features.github.GitHubGoalManager
 import com.example.touchgrass.presentation.blockerView.BlockerActivity
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
@@ -32,10 +34,15 @@ class InspectorService : AccessibilityService() {
 
     @Inject
     lateinit var screenTimeNudger: ScreenTimeNudger
+
+    @Inject
+    lateinit var gitHubGoalManager: GitHubGoalManager
     private var lastAnalysisTime = 0L
+    private var lastGoalLockAt = 0L
 
     companion object {
         private const val ANALYSIS_COOLDOWN_MS = 500L
+        private const val GOAL_LOCK_COOLDOWN_MS = 3_000L
     }
 
     override fun onServiceConnected() {
@@ -87,6 +94,22 @@ class InspectorService : AccessibilityService() {
 
         // Force-read mode: while a reading gate is owed, watched apps stay blocked
         screenTimeNudger.enforceGate()
+
+        // Goal lock: no entertainment until today's commit is done. Applies to
+        // every watched app (YouTube, Instagram, Netflix).
+        if (gitHubGoalManager.entertainmentLocked.value) {
+            val now = System.currentTimeMillis()
+            if (now - lastGoalLockAt >= GOAL_LOCK_COOLDOWN_MS) {
+                lastGoalLockAt = now
+                Toast.makeText(
+                    this,
+                    "Locked — commit to your repo to unlock entertainment today.",
+                    Toast.LENGTH_SHORT
+                ).show()
+                performGlobalAction(GLOBAL_ACTION_HOME)
+            }
+            return
+        }
 
         // Netflix is watch-time-only; no Shorts UI to analyze there
         if (packageName == "com.netflix.mediaclient") {

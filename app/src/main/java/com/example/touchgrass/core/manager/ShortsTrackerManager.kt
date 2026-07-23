@@ -62,7 +62,8 @@ class ShortsTrackerManager @Inject constructor(
     val triggerBlockEvent = _triggerBlockEvent.asSharedFlow()
 
     private var currentFingerprint: String? = null
-    private var lastHeartbeatAt = 0L
+    private var watchStartAt = 0L        // when the current short began being watched (0 = paused)
+    private var lastEventAt = 0L         // timestamp of the previous processed event
     private var lastBlockAt = 0L
     private var lastPersistAt = 0L
     private var todayKey: String = LocalDate.now().toString()
@@ -93,18 +94,26 @@ class ShortsTrackerManager @Inject constructor(
         val now = System.currentTimeMillis()
         rolloverIfNewDay()
 
+        // A long gap since our last event means the app was backgrounded or the
+        // screen was off. Bank the time up to the LAST event we actually saw (not
+        // "now") and pause — so away-time is never billed as watch time.
+        if (lastEventAt > 0L && now - lastEventAt > AWAY_GAP_MS) {
+            bankWatch(lastEventAt)
+        }
+
         when (val state = detector.detect(rootNode)) {
             is ScreenState.WatchingShort -> {
                 if (state.uniqueId != currentFingerprint) {
                     // A genuinely different video (channel or duration changed).
+                    bankWatch(now)                    // finalize the previous short's time
                     currentFingerprint = state.uniqueId
-                    lastHeartbeatAt = now
+                    watchStartAt = now                // start timing this one
                     _stats.update { it.copy(totalCount = it.totalCount + 1) }
                     Timber.tag("ShortsTracker")
                         .d(">>> NEW SHORT: ${state.uniqueId} | Total: ${_stats.value.totalCount}")
                     persist(force = true)
-                } else {
-                    accumulateWatchTime(now)
+                } else if (watchStartAt == 0L) {
+                    watchStartAt = now                // resume timing the same short
                 }
 
                 if (_stats.value.totalCount >= effectiveLimit.value) {
@@ -113,29 +122,31 @@ class ShortsTrackerManager @Inject constructor(
                 persist()
             }
             is ScreenState.BrowsingFeed -> {
-                // DO NOT clear currentFingerprint here. Pausing, opening comments,
-                // or tab-switching briefly reads as BrowsingFeed; forgetting the
-                // current short would recount it the moment we return.
-                lastHeartbeatAt = now  // so we don't bill the away-time on return
+                // Pause the timer but KEEP the fingerprint, so returning to the same
+                // short (after comments / pause / tab-switch) doesn't recount it.
+                bankWatch(now)
             }
             is ScreenState.Unknown -> {
                 // Transitioning, or identity unreadable this frame — ignore.
             }
         }
+
+        lastEventAt = now
     }
 
-
     /**
-     * Heartbeat-based time tracking: only count gaps between consecutive events while
-     * a short is on screen. Leaving the app stops events (package filter), so away-time
-     * larger than [MAX_HEARTBEAT_GAP_MS] is discarded instead of billed as watch time.
+     * Dwell-based timing: bill the wall-clock time a single short was actually on
+     * screen (from [watchStartAt] up to [upTo]), then pause. Robust to how often
+     * YouTube fires accessibility events, unlike the old per-event heartbeat.
      */
-    private fun accumulateWatchTime(now: Long) {
-        val delta = now - lastHeartbeatAt
-        if (delta in 1..MAX_HEARTBEAT_GAP_MS) {
-            _stats.update { it.copy(totalTimeMillis = it.totalTimeMillis + delta) }
+    private fun bankWatch(upTo: Long) {
+        if (watchStartAt <= 0L) return
+        val dwell = (upTo - watchStartAt).coerceAtMost(MAX_SHORT_MS)
+        if (dwell > 0L) {
+            _stats.update { it.copy(totalTimeMillis = it.totalTimeMillis + dwell) }
+            persist(force = true)
         }
-        lastHeartbeatAt = now
+        watchStartAt = 0L
     }
 
     private fun maybeTriggerBlock(now: Long) {
@@ -150,6 +161,7 @@ class ShortsTrackerManager @Inject constructor(
         if (today != todayKey) {
             todayKey = today
             currentFingerprint = null
+            watchStartAt = 0L
             _stats.value = ShortsStats()
             persist(force = true)
             Timber.tag("ShortsTracker").i("New day (%s) — stats reset", today)
@@ -166,7 +178,8 @@ class ShortsTrackerManager @Inject constructor(
     }
 
     companion object {
-        private const val MAX_HEARTBEAT_GAP_MS = 10_000L
+        private const val MAX_SHORT_MS = 300_000L   // cap one short's billed dwell (5 min)
+        private const val AWAY_GAP_MS = 15_000L     // gap between events ⇒ app was backgrounded
         private const val BLOCK_COOLDOWN_MS = 5_000L
         private const val PERSIST_INTERVAL_MS = 5_000L
     }
