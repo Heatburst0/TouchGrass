@@ -7,6 +7,7 @@ import com.example.touchgrass.core.rewards.RewardsManager
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import timber.log.Timber
+import java.io.IOException
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -32,23 +33,44 @@ class GitHubGoalManager @Inject constructor(
 ) {
     val goals: Flow<List<GitHubGoalEntity>> = dao.observeAll()
 
-    suspend fun addGoal(owner: String, repo: String, author: String) {
-        dao.insert(
-            GitHubGoalEntity(
-                owner = owner.trim(),
-                repo = repo.trim(),
-                author = author.trim(),
-                createdDate = LocalDate.now().toString(),
-                lastSuccessDate = null,
-                lastSettledDate = null,
-                currentStreak = 0,
-                bestStreak = 0,
-                rewardPoints = DAILY_REWARD_POINTS,
-                penaltyShorts = DAILY_PENALTY_SHORTS,
-                active = true
+    /**
+     * Validates the repo is reachable BEFORE saving. Returns null on success,
+     * or a user-facing error message (e.g. a private repo that needs a token).
+     */
+    suspend fun addGoal(owner: String, repo: String, author: String): String? {
+        val token = settings.githubToken.first().ifBlank { null }
+        return try {
+            // Throwaway reachability probe: if GitHub answers at all, the repo
+            // exists and we can read it. 404/401/403 arrive as GitHubException.
+            api.hasCommit(
+                owner, repo, author.ifBlank { null },
+                since = Instant.now().minusSeconds(86_400),
+                until = Instant.now(),
+                token = token
             )
-        )
+            dao.insert(
+                GitHubGoalEntity(
+                    owner = owner.trim(),
+                    repo = repo.trim(),
+                    author = author.trim(),
+                    createdDate = LocalDate.now().toString(),
+                    lastSuccessDate = null,
+                    lastSettledDate = null,
+                    currentStreak = 0,
+                    bestStreak = 0,
+                    rewardPoints = DAILY_REWARD_POINTS,
+                    penaltyShorts = DAILY_PENALTY_SHORTS,
+                    active = true
+                )
+            )
+            null
+        } catch (e: GitHubException) {
+            e.message
+        } catch (e: IOException) {
+            "No connection — check your internet and try again."
+        }
     }
+
 
     suspend fun removeGoal(id: Long) = dao.delete(id)
 

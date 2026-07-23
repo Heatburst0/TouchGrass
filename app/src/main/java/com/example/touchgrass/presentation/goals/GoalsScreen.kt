@@ -18,9 +18,13 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
@@ -58,8 +62,10 @@ import com.example.touchgrass.ui.theme.InkElevated
 import com.example.touchgrass.ui.theme.TextPrimary
 import com.example.touchgrass.ui.theme.TextSecondary
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.time.LocalDate
@@ -81,6 +87,9 @@ class GoalsViewModel @Inject constructor(
     /** Deadline options offered in the create dialog, in hours. */
     val deadlineChoices = listOf("Today" to hoursUntilEndOfDay(), "24h" to 24, "3 days" to 72)
 
+    private val _gitHubError = MutableStateFlow<String?>(null)
+    val gitHubError: StateFlow<String?> = _gitHubError.asStateFlow()
+
     init {
         // Refresh GitHub verification whenever the Goals tab opens.
         viewModelScope.launch { gitHubManager.runChecks() }
@@ -99,13 +108,31 @@ class GoalsViewModel @Inject constructor(
         )
     }
 
-    fun createGitHubGoal(owner: String, repo: String, author: String, token: String) {
+    /** Invokes [onSuccess] only if the repo validated and the goal was saved. */
+    fun createGitHubGoal(
+        owner: String,
+        repo: String,
+        author: String,
+        token: String,
+        onSuccess: () -> Unit
+    ) {
         viewModelScope.launch {
+            _gitHubError.value = null
             if (token.isNotBlank()) settings.setGithubToken(token)
-            gitHubManager.addGoal(owner, repo, author)
-            gitHubManager.runChecks()
+            val error = gitHubManager.addGoal(owner, repo, author)
+            if (error == null) {
+                gitHubManager.runChecks()
+                onSuccess()
+            } else {
+                _gitHubError.value = error
+            }
         }
     }
+
+    fun clearGitHubError() {
+        _gitHubError.value = null
+    }
+
 
     fun removeGitHubGoal(id: Long) {
         viewModelScope.launch { gitHubManager.removeGoal(id) }
@@ -116,6 +143,7 @@ class GoalsViewModel @Inject constructor(
 fun GoalsScreen(viewModel: GoalsViewModel = hiltViewModel()) {
     val active by viewModel.active.collectAsState()
     val past by viewModel.past.collectAsState()
+    val gitHubError by viewModel.gitHubError.collectAsState()
     val gitHubGoals by viewModel.gitHubGoals.collectAsState()
     var showCreate by remember { mutableStateOf(false) }
     var showGitHub by remember { mutableStateOf(false) }
@@ -133,13 +161,20 @@ fun GoalsScreen(viewModel: GoalsViewModel = hiltViewModel()) {
 
     if (showGitHub) {
         CreateGitHubGoalDialog(
+            error = gitHubError,
             onConfirm = { owner, repo, author, token ->
-                viewModel.createGitHubGoal(owner, repo, author, token)
-                showGitHub = false
+                // Dialog closes only if the repo validates (onSuccess callback).
+                viewModel.createGitHubGoal(owner, repo, author, token) {
+                    showGitHub = false
+                }
             },
-            onDismiss = { showGitHub = false }
+            onDismiss = {
+                viewModel.clearGitHubError()
+                showGitHub = false
+            }
         )
     }
+
 
     LazyColumn(
         modifier = Modifier
@@ -457,19 +492,22 @@ private fun GitHubGoalCard(goal: GitHubGoalEntity, onRemove: () -> Unit) {
                 color = TextSecondary,
                 fontSize = 11.sp
             )
-            Text(
-                text = "Remove",
-                color = DangerRed,
-                fontSize = 11.sp,
-                fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.clickable(onClick = onRemove)
-            )
+            IconButton(onClick = onRemove, modifier = Modifier.size(28.dp)) {
+                Icon(
+                    imageVector = Icons.Filled.Delete,
+                    contentDescription = "Remove goal",
+                    tint = DangerRed,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+
         }
     }
 }
 
 @Composable
 private fun CreateGitHubGoalDialog(
+    error: String?,
     onConfirm: (owner: String, repo: String, author: String, token: String) -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -505,6 +543,12 @@ private fun CreateGitHubGoalDialog(
                     fontSize = 11.sp,
                     lineHeight = 15.sp
                 )
+
+                error?.let {
+                    Spacer(Modifier.height(10.dp))
+                    Text(text = it, color = DangerRed, fontSize = 12.sp, lineHeight = 16.sp)
+                }
+
             }
         },
         confirmButton = {
