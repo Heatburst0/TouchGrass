@@ -61,7 +61,7 @@ class ShortsTrackerManager @Inject constructor(
     private val _triggerBlockEvent = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
     val triggerBlockEvent = _triggerBlockEvent.asSharedFlow()
 
-    private var currentShortId: String? = null
+    private var currentFingerprint: String? = null
     private var lastHeartbeatAt = 0L
     private var lastBlockAt = 0L
     private var lastPersistAt = 0L
@@ -95,8 +95,9 @@ class ShortsTrackerManager @Inject constructor(
 
         when (val state = detector.detect(rootNode)) {
             is ScreenState.WatchingShort -> {
-                if (state.uniqueId != currentShortId) {
-                    currentShortId = state.uniqueId
+                if (state.uniqueId != currentFingerprint) {
+                    // A genuinely different video (channel or duration changed).
+                    currentFingerprint = state.uniqueId
                     lastHeartbeatAt = now
                     _stats.update { it.copy(totalCount = it.totalCount + 1) }
                     Timber.tag("ShortsTracker")
@@ -106,26 +107,23 @@ class ShortsTrackerManager @Inject constructor(
                     accumulateWatchTime(now)
                 }
 
-                // Re-fires (with a cooldown) if the user sneaks back into Shorts after a block.
                 if (_stats.value.totalCount >= effectiveLimit.value) {
                     maybeTriggerBlock(now)
                 }
                 persist()
             }
             is ScreenState.BrowsingFeed -> {
-                if (currentShortId != null) {
-                    accumulateWatchTime(now)
-                    currentShortId = null
-                    Timber.tag("ShortsTracker").d(">>> SESSION ENDED. Browsing feed.")
-                    persist(force = true)
-                }
+                // DO NOT clear currentFingerprint here. Pausing, opening comments,
+                // or tab-switching briefly reads as BrowsingFeed; forgetting the
+                // current short would recount it the moment we return.
+                lastHeartbeatAt = now  // so we don't bill the away-time on return
             }
             is ScreenState.Unknown -> {
-                // Transitioning or UI is flickering (e.g. buffering).
-                // Do nothing and let the heartbeat resume on the next confident detection.
+                // Transitioning, or identity unreadable this frame — ignore.
             }
         }
     }
+
 
     /**
      * Heartbeat-based time tracking: only count gaps between consecutive events while
@@ -151,7 +149,7 @@ class ShortsTrackerManager @Inject constructor(
         val today = LocalDate.now().toString()
         if (today != todayKey) {
             todayKey = today
-            currentShortId = null
+            currentFingerprint = null
             _stats.value = ShortsStats()
             persist(force = true)
             Timber.tag("ShortsTracker").i("New day (%s) — stats reset", today)

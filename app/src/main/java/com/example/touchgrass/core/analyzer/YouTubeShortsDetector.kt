@@ -20,18 +20,26 @@ class YouTubeShortsDetector @Inject constructor() {
 
         // 2. LOGIC: Is it a Short?
         // We no longer look for Like/Dislike. We look for the literal video progress bar!
-        if (analysis.hasVideoProgressBar && analysis.channelSignature.isNotEmpty()) {
-            return ScreenState.WatchingShort(uniqueId = analysis.channelSignature)
+        if (analysis.hasVideoProgressBar) {
+            // Per-VIDEO fingerprint: channel + total duration. Stable across
+            // pause / comments / tab-switch, yet different between two shorts from
+            // the same channel (which the old channel-only id could not tell apart).
+            val fingerprint = analysis.channelSignature + "|" + analysis.videoDuration
+            return if (fingerprint == "|") ScreenState.Unknown
+                   else ScreenState.WatchingShort(uniqueId = fingerprint)
         }
 
         return ScreenState.BrowsingFeed
+
     }
 
     private data class TreeClues(
         var hasEnterFullscreen: Boolean = false,
         var hasVideoProgressBar: Boolean = false,
-        var channelSignature: String = ""
+        var channelSignature: String = "",
+        var videoDuration: String = ""
     )
+
 
     private fun scanTree(root: AccessibilityNodeInfo): TreeClues {
         val clues = TreeClues()
@@ -59,7 +67,11 @@ class YouTubeShortsDetector @Inject constructor() {
             // Your logs: [SeekBar] Desc: 0 minutes 2 seconds of 0 minutes 58 seconds
             if (className == "android.widget.SeekBar" && timeRegex.matches(desc)) {
                 clues.hasVideoProgressBar = true
+                // "0 minutes 2 seconds of 0 minutes 58 seconds" -> "0 minutes 58 seconds".
+                // The TOTAL length is stable per video; the current position isn't.
+                clues.videoDuration = desc.substringAfter(" of ", "").trim()
             }
+
 
             // --- CHECK 3: The Channel Signature (For Unique ID) ---
             // YouTube sometimes uses "Subscribe to @Name" or "Go to channel @Name"
@@ -69,7 +81,11 @@ class YouTubeShortsDetector @Inject constructor() {
             }
 
             // --- OPTIMIZATION: Early Exit ---
-            if (clues.hasEnterFullscreen || (clues.hasVideoProgressBar && clues.channelSignature.isNotEmpty())) {
+            // Only bail early once we KNOW it's a normal video (fullscreen toggle).
+            // Otherwise keep scanning so we read BOTH the seekbar (duration) and the
+            // channel before deciding — a normal video's seekbar must not short-circuit
+            // us into a "Short" verdict before its fullscreen button is found.
+            if (clues.hasEnterFullscreen) {
                 return clues
             }
 
