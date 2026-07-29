@@ -81,6 +81,11 @@ class YouTubeShortsDetector @Inject constructor() {
             if (desc == "Remix" || desc.startsWith("Remix this Short", ignoreCase = true)) {
                 clues.hasShortsMarker = true
             }
+
+            if (desc.startsWith("See more videos using this sound", ignoreCase = true)) {
+                clues.hasShortsMarker = true
+            }
+
             // Captured for the fingerprint only — NOT a marker on its own.
             if (desc.startsWith("like this video", ignoreCase = true)) {
                 clues.likeSignature = desc          // "...along with 58 thousand other people"
