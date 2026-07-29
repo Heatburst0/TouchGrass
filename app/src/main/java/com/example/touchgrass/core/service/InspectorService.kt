@@ -103,7 +103,7 @@ class InspectorService : AccessibilityService() {
                 lastGoalLockAt = now
                 Toast.makeText(
                     this,
-                    "Locked — commit to your repo to unlock entertainment today.",
+                    "Locked — finish today's goals to unlock entertainment.",
                     Toast.LENGTH_SHORT
                 ).show()
                 performGlobalAction(GLOBAL_ACTION_HOME)

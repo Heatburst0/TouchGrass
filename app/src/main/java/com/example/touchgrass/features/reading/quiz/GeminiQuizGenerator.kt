@@ -22,8 +22,10 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * Quiz generation on the Gemini API free tier (multimodal, so page photos go
- * in directly — no OCR step). Key comes from local.properties → BuildConfig.
+ * Quiz generation on the Gemini API free tier. Two paths, both provider-agnostic
+ * behind [QuizGenerator]: a TEXT path (used after on-device OCR — cheap, few
+ * tokens) and a multimodal IMAGE path (vision fallback for photos OCR couldn't
+ * read). Key comes from local.properties → BuildConfig.
  */
 @Singleton
 class GeminiQuizGenerator @Inject constructor() : QuizGenerator {
@@ -39,15 +41,10 @@ class GeminiQuizGenerator @Inject constructor() : QuizGenerator {
         pageImages: List<File>,
         questionCount: Int
     ): List<QuizQuestion> = withContext(Dispatchers.IO) {
-        if (!isConfigured()) {
-            throw QuizGenerationException(
-                "No AI key configured. Get a free key at aistudio.google.com and add " +
-                        "GEMINI_API_KEY=... to local.properties, then rebuild."
-            )
-        }
+        ensureConfigured()
         if (pageImages.isEmpty()) throw QuizGenerationException("No page photos to quiz on.")
 
-        val parts = JSONArray().put(JSONObject().put("text", buildPrompt(questionCount)))
+        val parts = JSONArray().put(JSONObject().put("text", buildImagePrompt(questionCount)))
         pageImages.forEach { file ->
             parts.put(
                 JSONObject().put(
@@ -58,7 +55,32 @@ class GeminiQuizGenerator @Inject constructor() : QuizGenerator {
                 )
             )
         }
+        runGeneration(parts, questionCount)
+    }
 
+    override suspend fun generateQuizFromText(
+        pageText: String,
+        questionCount: Int
+    ): List<QuizQuestion> = withContext(Dispatchers.IO) {
+        ensureConfigured()
+        if (pageText.isBlank()) throw QuizGenerationException("No readable text to quiz on.")
+
+        val parts = JSONArray().put(JSONObject().put("text", buildTextPrompt(questionCount, pageText)))
+        runGeneration(parts, questionCount)
+    }
+
+    private fun ensureConfigured() {
+        if (!isConfigured()) {
+            throw QuizGenerationException(
+                "No AI key configured. Get a free key at aistudio.google.com and add " +
+                        "GEMINI_API_KEY=... to local.properties, then rebuild."
+            )
+        }
+    }
+
+    /** Shared request path: wrap [parts] in a request body, walk the model
+     *  fallback list, and parse the winning response. */
+    private suspend fun runGeneration(parts: JSONArray, questionCount: Int): List<QuizQuestion> {
         val body = JSONObject()
             .put("contents", JSONArray().put(JSONObject().put("parts", parts)))
             .put(
@@ -80,7 +102,7 @@ class GeminiQuizGenerator @Inject constructor() : QuizGenerator {
                     if (model != MODELS.first()) {
                         Timber.tag("Quiz").i("Quiz served by fallback model %s", model)
                     }
-                    return@withContext parseQuestions(outcome.body, questionCount)
+                    return parseQuestions(outcome.body, questionCount)
                 }
                 is Outcome.TryNextModel -> lastFailure = outcome.failure
                 is Outcome.Fatal -> throw outcome.failure
@@ -169,7 +191,7 @@ class GeminiQuizGenerator @Inject constructor() : QuizGenerator {
         )
     }
 
-    private fun buildPrompt(questionCount: Int) = """
+    private fun buildImagePrompt(questionCount: Int) = """
         You are verifying that someone actually read the book pages in the attached photos.
         Create exactly $questionCount multiple-choice questions that can ONLY be answered by
         someone who read the text on these pages. Base every question strictly on the visible
@@ -181,6 +203,23 @@ class GeminiQuizGenerator @Inject constructor() : QuizGenerator {
 
         If the images do not contain readable book text, respond with:
         {"error": "short reason"}
+    """.trimIndent()
+
+    private fun buildTextPrompt(questionCount: Int, pageText: String) = """
+        You are verifying that someone actually read the following book text.
+        Create exactly $questionCount multiple-choice questions that can ONLY be answered by
+        someone who read THIS text. Base every question strictly on it; do not use outside
+        knowledge. Each question has exactly 4 options with one correct answer, and wrong
+        options must be plausible.
+
+        Respond with ONLY a JSON array in this exact shape:
+        [{"question": "...", "options": ["...","...","...","..."], "correctIndex": 0}]
+
+        If the text is too short or unreadable to make questions, respond with:
+        {"error": "short reason"}
+
+        TEXT:
+        ${pageText.take(MAX_TEXT_CHARS)}
     """.trimIndent()
 
     private fun parseQuestions(responseText: String, expected: Int): List<QuizQuestion> {
@@ -263,6 +302,7 @@ class GeminiQuizGenerator @Inject constructor() : QuizGenerator {
         )
         private const val MAX_DIMENSION_PX = 1536
         private const val JPEG_QUALITY = 80
+        private const val MAX_TEXT_CHARS = 8000    // cap OCR text sent to the model
         private const val MAX_RETRIES = 3          // per model, for 503/500/network
         private const val BASE_BACKOFF_MS = 1500L  // 1.5s, 3s between retries
     }

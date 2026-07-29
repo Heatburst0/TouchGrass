@@ -70,7 +70,7 @@ import com.example.touchgrass.core.rewards.RewardsManager
 import com.example.touchgrass.features.reading.data.BookRepository
 import com.example.touchgrass.features.reading.pdf.PdfBookRenderer
 import com.example.touchgrass.features.reading.quiz.QuizGenerationException
-import com.example.touchgrass.features.reading.quiz.QuizGenerator
+import com.example.touchgrass.features.reading.quiz.QuizCoordinator
 import com.example.touchgrass.features.reading.quiz.QuizQuestion
 import com.example.touchgrass.ui.theme.AmberWarn
 import com.example.touchgrass.ui.theme.GrassGreen
@@ -127,7 +127,7 @@ class ReaderViewModel @Inject constructor(
     private val repo: BookRepository,
     private val rewards: RewardsManager,
     private val goalEngine: GoalEngine,
-    private val quizGenerator: QuizGenerator
+    private val quizCoordinator: QuizCoordinator
 ) : ViewModel() {
 
     private val bookId: Long = checkNotNull(savedStateHandle["bookId"])
@@ -233,7 +233,7 @@ class ReaderViewModel @Inject constructor(
                         files += file
                     }
                 }
-                val questions = quizGenerator.generateQuiz(files)
+                val questions = quizCoordinator.makeQuiz(files)
                 _quizPhase.value = PdfQuizPhase.Active(questions, pages)
             } catch (e: QuizGenerationException) {
                 _quizPhase.value = PdfQuizPhase.None

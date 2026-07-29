@@ -19,10 +19,17 @@ interface QuizGenerator {
 
     /**
      * Builds [questionCount] multiple-choice questions answerable ONLY from
-     * the supplied page images.
+     * the supplied page images (vision path — robust to messy photos).
      * @throws QuizGenerationException with a user-presentable message on failure.
      */
     suspend fun generateQuiz(pageImages: List<File>, questionCount: Int = 3): List<QuizQuestion>
+
+    /**
+     * Builds [questionCount] questions from already-extracted page TEXT (OCR).
+     * Cheaper and faster than the image path; used when on-device OCR succeeds.
+     * @throws QuizGenerationException with a user-presentable message on failure.
+     */
+    suspend fun generateQuizFromText(pageText: String, questionCount: Int = 3): List<QuizQuestion>
 }
 
 class QuizGenerationException(message: String, cause: Throwable? = null) :

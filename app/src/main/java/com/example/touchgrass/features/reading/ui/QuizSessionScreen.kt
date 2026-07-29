@@ -60,7 +60,7 @@ import com.example.touchgrass.core.goals.PillarType
 import com.example.touchgrass.core.rewards.RewardsManager
 import com.example.touchgrass.features.reading.data.BookRepository
 import com.example.touchgrass.features.reading.quiz.QuizGenerationException
-import com.example.touchgrass.features.reading.quiz.QuizGenerator
+import com.example.touchgrass.features.reading.quiz.QuizCoordinator
 import com.example.touchgrass.features.reading.quiz.QuizQuestion
 import com.example.touchgrass.ui.theme.AmberWarn
 import com.example.touchgrass.ui.theme.DangerRed
@@ -112,7 +112,7 @@ class QuizSessionViewModel @Inject constructor(
     private val repo: BookRepository,
     private val rewards: RewardsManager,
     private val goalEngine: GoalEngine,
-    private val quizGenerator: QuizGenerator
+    private val quizCoordinator: QuizCoordinator
 ) : ViewModel() {
 
     private val bookId: Long = checkNotNull(savedStateHandle["bookId"])
@@ -166,7 +166,7 @@ class QuizSessionViewModel @Inject constructor(
         _uiState.update { it.copy(phase = QuizPhase.Generating, answers = emptyMap(), error = null) }
         viewModelScope.launch {
             try {
-                val questions = quizGenerator.generateQuiz(photos)
+                val questions = quizCoordinator.makeQuiz(photos)
                 _uiState.update { it.copy(phase = QuizPhase.Quiz(questions)) }
             } catch (e: QuizGenerationException) {
                 _uiState.update { it.copy(phase = QuizPhase.Capture, error = e.message) }

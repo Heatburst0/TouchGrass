@@ -99,6 +99,9 @@ dependencies {
     // OkHttp (quiz generation + GitHub verification)
     implementation(libs.okhttp)
 
+    // ML Kit on-device text recognition (OCR for book pages)
+    implementation(libs.mlkit.text.recognition)
+
     // WorkManager (background daily GitHub commit checks)
     implementation(libs.androidx.work.runtime)
     implementation(libs.androidx.hilt.work)
