@@ -56,6 +56,25 @@ class RewardsManager @Inject constructor(
         settings.setReadingGatePending(false)
     }
 
+    /**
+     * Spends [SKIP_GATE_COST] points to dismiss the current force-read gate, so
+     * the user can keep watching without reading this time. Re-arms on the next
+     * watch-time interval. Returns false if the balance is too low.
+     */
+    suspend fun redeemSkipReadingGate(): Boolean {
+        if (pointsBalance.value < SKIP_GATE_COST) return false
+        pointsDao.insert(
+            PointsEntryEntity(
+                delta = -SKIP_GATE_COST,
+                reason = "skip_reading_gate",
+                createdAt = System.currentTimeMillis()
+            )
+        )
+        settings.setReadingGatePending(false)
+        Timber.tag("Rewards").i("Spent %d pts to skip reading gate", SKIP_GATE_COST)
+        return true
+    }
+
     /** Trades [SHORTS_UNLOCK_COST] points for [SHORTS_UNLOCK_AMOUNT] extra shorts today. */
     suspend fun redeemExtraShorts(): Boolean {
         if (pointsBalance.value < SHORTS_UNLOCK_COST) return false
@@ -75,5 +94,6 @@ class RewardsManager @Inject constructor(
         const val POINTS_PER_PAGE = 10
         const val SHORTS_UNLOCK_COST = 20   // = 2 verified pages
         const val SHORTS_UNLOCK_AMOUNT = 5
+        const val SKIP_GATE_COST = 50       // = 5 pages' worth to skip a forced read
     }
 }
