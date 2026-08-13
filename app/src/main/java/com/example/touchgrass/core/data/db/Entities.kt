@@ -83,3 +83,28 @@ data class GitHubGoalEntity(
     val penaltyShorts: Int,
     val active: Boolean
 )
+
+
+/**
+ * Unified goal record — will replace `commitments` + `github_goals` and wrap
+ * shorts. Type-specific config/runtime live in JSON so a NEW goal type needs no
+ * migration. Enums stored as names.
+ */
+@Entity(tableName = "goals")
+data class GoalEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val type: String,                 // GoalType.name
+    val title: String,
+    val direction: String,            // GoalDirection.name
+    val schedule: String,             // GoalSchedule.name
+    val target: Int,
+    val unit: String,
+    val progress: Int = 0,
+    val rewardPoints: Int = 0,
+    val penaltyShorts: Int = 0,
+    val configJson: String = "{}",    // repo/owner, bookId, app-allowlist, daily cap…
+    val stateJson: String = "{}",     // streak, lastSuccessDate…
+    val active: Boolean = true,
+    val createdAt: Long,
+    val deadlineAt: Long? = null      // ONE_SHOT only
+)

@@ -46,6 +46,8 @@ class SettingsRepository @Inject constructor(
         val GITHUB_TOKEN = stringPreferencesKey("github_token")
         val NUDGE_INTERVAL_MIN = intPreferencesKey("nudge_interval_min")
         val GOAL_LOCK_ENABLED = booleanPreferencesKey("goal_lock_enabled")
+        val SHORTS_TEST_MODE = booleanPreferencesKey("shorts_test_mode")
+        val GITHUB_GOALS_MIGRATED = booleanPreferencesKey("github_goals_migrated")
     }
 
     val shortsLimit: Flow<Int> = context.dataStore.data
@@ -144,6 +146,24 @@ class SettingsRepository @Inject constructor(
 
     suspend fun setGoalLockEnabled(enabled: Boolean) {
         context.dataStore.edit { it[Keys.GOAL_LOCK_ENABLED] = enabled }
+    }
+
+    // ---- Detector test mode: count tracked shorts WITHOUT touching the real limit ----
+
+    val shortsTestMode: Flow<Boolean> = context.dataStore.data
+        .map { it[Keys.SHORTS_TEST_MODE] ?: false }
+
+    suspend fun setShortsTestMode(enabled: Boolean) {
+        context.dataStore.edit { it[Keys.SHORTS_TEST_MODE] = enabled }
+    }
+
+    // ---- One-time flag: legacy github_goals rows copied into the goals table ----
+
+    val githubGoalsMigrated: Flow<Boolean> = context.dataStore.data
+        .map { it[Keys.GITHUB_GOALS_MIGRATED] ?: false }
+
+    suspend fun setGithubGoalsMigrated(done: Boolean) {
+        context.dataStore.edit { it[Keys.GITHUB_GOALS_MIGRATED] = done }
     }
 
     // ---- GitHub (optional PAT for private repos / higher rate limit) ----

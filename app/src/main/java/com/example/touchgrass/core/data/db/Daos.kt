@@ -113,3 +113,27 @@ interface PointsDao {
     @Query("SELECT COALESCE(SUM(delta), 0) FROM points_ledger WHERE delta > 0")
     fun lifetimeEarned(): Flow<Int>
 }
+
+@Dao
+interface GoalDao {
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(goal: GoalEntity): Long
+
+    @Update suspend fun update(goal: GoalEntity)
+
+    @Query("SELECT * FROM goals WHERE active = 1 ORDER BY createdAt DESC")
+    fun observeActive(): Flow<List<GoalEntity>>
+
+    @Query("SELECT * FROM goals WHERE active = 1 AND type = :type")
+    suspend fun activeOfType(type: String): List<GoalEntity>
+
+    @Query("SELECT * FROM goals WHERE id = :id")
+    suspend fun byId(id: Long): GoalEntity?
+
+    @Query("SELECT * FROM goals")
+    fun observeAll(): Flow<List<GoalEntity>>
+
+    @Query("DELETE FROM goals WHERE id = :id")
+    suspend fun delete(id: Long)
+}
+

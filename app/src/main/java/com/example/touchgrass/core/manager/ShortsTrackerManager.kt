@@ -61,7 +61,20 @@ class ShortsTrackerManager @Inject constructor(
     private val _triggerBlockEvent = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
     val triggerBlockEvent = _triggerBlockEvent.asSharedFlow()
 
-    private var currentFingerprint: String? = null
+    /**
+     * Detector test mode. When on, tracked shorts are tallied into [testCount] only —
+     * the real count, watch time, daily limit and blocking are all left untouched, so
+     * you can validate detection without polluting stats or triggering a lockout.
+     */
+    val testMode: StateFlow<Boolean> = settings.shortsTestMode
+        .stateIn(scope, SharingStarted.Eagerly, false)
+
+    private val _testCount = MutableStateFlow(0)
+    val testCount: StateFlow<Int> = _testCount.asStateFlow()
+
+    private var currentChannel: String? = null       // @handle of the short on screen now
+    private var currentFingerprint: String? = null   // full identity of that short
+    private var currentShortSince = 0L               // when it was established (load-flip window)
     private var watchStartAt = 0L        // when the current short began being watched (0 = paused)
     private var lastEventAt = 0L         // timestamp of the previous processed event
     private var lastBlockAt = 0L
@@ -90,6 +103,12 @@ class ShortsTrackerManager @Inject constructor(
         scope.launch { settings.setShortsLimit(newLimit) }
     }
 
+    /** Toggle detector test mode; each session starts the tracked-count from zero. */
+    fun setTestMode(enabled: Boolean) {
+        _testCount.value = 0
+        scope.launch { settings.setShortsTestMode(enabled) }
+    }
+
     fun processAccessibilityEvent(rootNode: AccessibilityNodeInfo) {
         val now = System.currentTimeMillis()
         rolloverIfNewDay()
@@ -103,29 +122,37 @@ class ShortsTrackerManager @Inject constructor(
 
         when (val state = detector.detect(rootNode)) {
             is ScreenState.WatchingShort -> {
-                if (state.uniqueId != currentFingerprint) {
-                    // A genuinely different video (channel or duration changed).
-                    bankWatch(now)                    // finalize the previous short's time
-                    currentFingerprint = state.uniqueId
-                    watchStartAt = now                // start timing this one
-                    _stats.update { it.copy(totalCount = it.totalCount + 1) }
-                    Timber.tag("ShortsTracker")
-                        .d(">>> NEW SHORT: ${state.uniqueId} | Total: ${_stats.value.totalCount}")
-                    persist(force = true)
-                } else if (watchStartAt == 0L) {
-                    watchStartAt = now                // resume timing the same short
+                val fp = state.uniqueId
+                val channel = channelOf(fp)
+                when {
+                    // Channel unreadable this frame — can't judge identity. Keep timing, don't count.
+                    !channel.startsWith("@") -> {
+                        if (fp == currentFingerprint && watchStartAt == 0L) watchStartAt = now
+                    }
+                    // Different creator → unambiguously a new short. Count right away.
+                    channel != currentChannel -> registerNewShort(fp, channel, now)
+                    // Exact same short still on screen — resume timing if we had paused.
+                    fp == currentFingerprint -> {
+                        if (watchStartAt == 0L) watchStartAt = now
+                    }
+                    // Same channel, counts changed, and the current short has been up a while →
+                    // it's the creator's NEXT short.
+                    now - currentShortSince >= SETTLE_MS -> registerNewShort(fp, channel, now)
+                    // Same channel, changed quickly → just this short's like/comment loading in.
+                    else -> currentFingerprint = fp
                 }
 
-                if (_stats.value.totalCount >= effectiveLimit.value) {
+                if (!testMode.value && _stats.value.totalCount >= effectiveLimit.value) {
                     maybeTriggerBlock(now)
                 }
                 persist()
             }
             is ScreenState.BrowsingFeed -> {
-                // Pause the timer but KEEP the fingerprint, so returning to the same
-                // short (after comments / pause / tab-switch) doesn't recount it.
+                // Pause timing but KEEP the identity, so returning to the same short
+                // (after comments / pause / tab-switch) doesn't recount it.
                 bankWatch(now)
             }
+
             is ScreenState.Unknown -> {
                 // Transitioning, or identity unreadable this frame — ignore.
             }
@@ -134,12 +161,40 @@ class ShortsTrackerManager @Inject constructor(
         lastEventAt = now
     }
 
+    /** Extract the @handle so "Subscribe to @x" and "Go to channel @x" map to one identity. */
+    private fun channelOf(fp: String): String {
+        val channelDesc = fp.substringBefore('|')
+        val at = channelDesc.indexOf('@')
+        return if (at >= 0) channelDesc.substring(at).substringBefore(' ') else channelDesc
+    }
+
+    private fun registerNewShort(fp: String, channel: String, now: Long) {
+        if (testMode.value) {
+            // Test mode: tally separately; leave the real count / time / economy alone.
+            currentFingerprint = fp
+            currentChannel = channel
+            currentShortSince = now
+            _testCount.update { it + 1 }
+            Timber.tag("ShortsTracker").d(">>> TEST SHORT: $fp | Tracked: ${_testCount.value}")
+            return
+        }
+        bankWatch(now)                    // finalize the previous short's time
+        currentFingerprint = fp
+        currentChannel = channel
+        currentShortSince = now
+        watchStartAt = now                // start timing this one
+        _stats.update { it.copy(totalCount = it.totalCount + 1) }
+        Timber.tag("ShortsTracker").d(">>> NEW SHORT: $fp | Total: ${_stats.value.totalCount}")
+        persist(force = true)
+    }
+
     /**
      * Dwell-based timing: bill the wall-clock time a single short was actually on
      * screen (from [watchStartAt] up to [upTo]), then pause. Robust to how often
      * YouTube fires accessibility events, unlike the old per-event heartbeat.
      */
     private fun bankWatch(upTo: Long) {
+        if (testMode.value) { watchStartAt = 0L; return }   // never bill real time in test mode
         if (watchStartAt <= 0L) return
         val dwell = (upTo - watchStartAt).coerceAtMost(MAX_SHORT_MS)
         if (dwell > 0L) {
@@ -161,6 +216,8 @@ class ShortsTrackerManager @Inject constructor(
         if (today != todayKey) {
             todayKey = today
             currentFingerprint = null
+            currentChannel = null
+            currentShortSince = 0L
             watchStartAt = 0L
             _stats.value = ShortsStats()
             persist(force = true)
@@ -178,6 +235,7 @@ class ShortsTrackerManager @Inject constructor(
     }
 
     companion object {
+        private const val SETTLE_MS = 500L   // same-channel change sooner than this = counts loading in
         private const val MAX_SHORT_MS = 300_000L   // cap one short's billed dwell (5 min)
         private const val AWAY_GAP_MS = 15_000L     // gap between events ⇒ app was backgrounded
         private const val BLOCK_COOLDOWN_MS = 5_000L

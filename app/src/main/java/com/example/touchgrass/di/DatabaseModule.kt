@@ -5,6 +5,7 @@ import androidx.room.Room
 import com.example.touchgrass.core.data.db.BookDao
 import com.example.touchgrass.core.data.db.CommitmentDao
 import com.example.touchgrass.core.data.db.GitHubGoalDao
+import com.example.touchgrass.core.data.db.GoalDao
 import com.example.touchgrass.core.data.db.PageReadDao
 import com.example.touchgrass.core.data.db.PointsDao
 import com.example.touchgrass.core.data.db.TouchGrassDatabase
@@ -27,7 +28,9 @@ object DatabaseModule {
                 TouchGrassDatabase.MIGRATION_1_2,
                 TouchGrassDatabase.MIGRATION_2_3,
                 TouchGrassDatabase.MIGRATION_3_4,
-                TouchGrassDatabase.MIGRATION_4_5
+                TouchGrassDatabase.MIGRATION_4_5,
+                TouchGrassDatabase.MIGRATION_5_6,
+                TouchGrassDatabase.MIGRATION_6_7
             )
             .build()
 
@@ -45,4 +48,7 @@ object DatabaseModule {
 
     @Provides
     fun provideGitHubGoalDao(db: TouchGrassDatabase): GitHubGoalDao = db.gitHubGoalDao()
+
+    @Provides
+    fun provideGoalDao(db: TouchGrassDatabase): GoalDao = db.goalDao()
 }

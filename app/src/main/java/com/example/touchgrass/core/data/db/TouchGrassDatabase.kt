@@ -11,9 +11,10 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         PageReadEntity::class,
         PointsEntryEntity::class,
         CommitmentEntity::class,
-        GitHubGoalEntity::class
+        GitHubGoalEntity::class,
+        GoalEntity::class
     ],
-    version = 5,
+    version = 7,
     exportSchema = false
 )
 abstract class TouchGrassDatabase : RoomDatabase() {
@@ -22,6 +23,7 @@ abstract class TouchGrassDatabase : RoomDatabase() {
     abstract fun pointsDao(): PointsDao
     abstract fun commitmentDao(): CommitmentDao
     abstract fun gitHubGoalDao(): GitHubGoalDao
+    abstract fun goalDao(): GoalDao
 
     companion object {
         /** v2: physical (paper) books with AI quiz verification. */
@@ -62,6 +64,64 @@ abstract class TouchGrassDatabase : RoomDatabase() {
                 )
             }
         }
+
+        /** v6: unified goals table (Goal + Verifier refactor, Phase 0). */
+        val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+            CREATE TABLE IF NOT EXISTS `goals` (
+                `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                `type` TEXT NOT NULL,
+                `title` TEXT NOT NULL,
+                `direction` TEXT NOT NULL,
+                `schedule` TEXT NOT NULL,
+                `target` INTEGER NOT NULL,
+                `unit` TEXT NOT NULL,
+                `progress` INTEGER NOT NULL,
+                `rewardPoints` INTEGER NOT NULL,
+                `penaltyShorts` INTEGER NOT NULL,
+                `configJson` TEXT NOT NULL,
+                `stateJson` TEXT NOT NULL,
+                `active` INTEGER NOT NULL,
+                `createdAt` INTEGER NOT NULL,
+                `deadlineAt` INTEGER
+            )
+            """.trimIndent()
+                )
+            }
+        }
+
+        /** v7: register the goals entity with Room. The table already exists from
+         *  v6 (created via raw SQL); this bumps the version so Room re-validates
+         *  now that GoalEntity is a real @Entity. CREATE IF NOT EXISTS keeps it
+         *  safe for fresh v6 installs too. */
+        val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+            CREATE TABLE IF NOT EXISTS `goals` (
+                `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                `type` TEXT NOT NULL,
+                `title` TEXT NOT NULL,
+                `direction` TEXT NOT NULL,
+                `schedule` TEXT NOT NULL,
+                `target` INTEGER NOT NULL,
+                `unit` TEXT NOT NULL,
+                `progress` INTEGER NOT NULL,
+                `rewardPoints` INTEGER NOT NULL,
+                `penaltyShorts` INTEGER NOT NULL,
+                `configJson` TEXT NOT NULL,
+                `stateJson` TEXT NOT NULL,
+                `active` INTEGER NOT NULL,
+                `createdAt` INTEGER NOT NULL,
+                `deadlineAt` INTEGER
+            )
+            """.trimIndent()
+                )
+            }
+        }
+
 
         /** v4: commitments — verified pledges with a reward/penalty stake. */
         val MIGRATION_3_4 = object : Migration(3, 4) {

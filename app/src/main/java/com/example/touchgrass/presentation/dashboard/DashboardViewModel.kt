@@ -38,7 +38,15 @@ class DashboardViewModel @Inject constructor(
     val gitHubGoals: StateFlow<List<GitHubGoalEntity>> = gitHubManager.goals
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    /** Detector test mode: tracked-count without touching the real limit. */
+    val testMode: StateFlow<Boolean> = trackerManager.testMode
+    val testCount: StateFlow<Int> = trackerManager.testCount
+
     fun updateShortsLimit(newLimit: Int) {
         trackerManager.updateShortsLimit(newLimit)
+    }
+
+    fun setTestMode(enabled: Boolean) {
+        trackerManager.setTestMode(enabled)
     }
 }

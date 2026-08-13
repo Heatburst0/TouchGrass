@@ -68,8 +68,12 @@ class YouTubeShortsDetector @Inject constructor() {
 
             if (logging) Log.d(LOG_TAG, "$className | desc='$desc' | text='$text'")
 
-            // Normal-video fingerprint: fullscreen toggle.
-            if (desc == "Enter fullscreen" || text == "Enter fullscreen") {
+            // Normal-video fingerprint: a fullscreen toggle. A windowed video shows
+            // "Enter fullscreen"; an ALREADY-fullscreen one shows "Exit fullscreen".
+            // Shorts have neither, so any "fullscreen" affordance means normal video.
+            if (desc.contains("fullscreen", ignoreCase = true) ||
+                text.contains("fullscreen", ignoreCase = true)
+            ) {
                 clues.hasEnterFullscreen = true
             }
 
@@ -86,19 +90,30 @@ class YouTubeShortsDetector @Inject constructor() {
                 clues.hasShortsMarker = true
             }
 
-            // Captured for the fingerprint only — NOT a marker on its own.
-            if (desc.startsWith("like this video", ignoreCase = true)) {
+            // NOTE: the video-timeline SeekBar is deliberately NOT a marker — normal
+            // (incl. fullscreen) videos and the feed use a SeekBar too, so it caused
+            // fullscreen videos to be misread as Shorts. Video Progress / Remix /
+            // "See more sound" are the Shorts-exclusive markers.
+
+            // Fingerprint fields — FIRST-wins. The RecyclerView keeps the PREVIOUS
+            // short's rail attached next to the on-screen one; the active short is
+            // emitted first, so locking onto the first value ignores the stale
+            // neighbor (last-wins was grabbing the neighbor on fast swipes).
+            if (clues.likeSignature.isEmpty() &&
+                desc.startsWith("like this video", ignoreCase = true)
+            ) {
                 clues.likeSignature = desc          // "...along with 58 thousand other people"
             }
 
-            // Fingerprint helpers (not markers on their own).
-            if (desc.startsWith("View ", ignoreCase = true) &&
+            if (clues.commentSignature.isEmpty() &&
+                desc.startsWith("View ", ignoreCase = true) &&
                 desc.contains("comment", ignoreCase = true)
             ) {
                 clues.commentSignature = desc       // "View 482 comments"
             }
-            if (desc.startsWith("Subscribe to @", ignoreCase = true) ||
-                desc.startsWith("Go to channel @", ignoreCase = true)
+            if (clues.channelSignature.isEmpty() &&
+                (desc.startsWith("Subscribe to @", ignoreCase = true) ||
+                 desc.startsWith("Go to channel @", ignoreCase = true))
             ) {
                 clues.channelSignature = desc
             }

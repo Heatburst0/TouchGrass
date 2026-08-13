@@ -35,6 +35,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -90,6 +92,8 @@ fun DoomscrollDashboard(viewModel: DashboardViewModel) {
     val points by viewModel.pointsBalance.collectAsState()
     val gitHubGoals by viewModel.gitHubGoals.collectAsState()
     val activeCommitments by viewModel.activeCommitments.collectAsState()
+    val testMode by viewModel.testMode.collectAsState()
+    val testCount by viewModel.testCount.collectAsState()
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
 
@@ -247,6 +251,15 @@ fun DoomscrollDashboard(viewModel: DashboardViewModel) {
         LimitCard(
             limit = limit,
             onLimitChange = { viewModel.updateShortsLimit(it) }
+        )
+
+        Spacer(Modifier.height(12.dp))
+
+        // ---- Detector test mode (validate tracking without touching the real count) ----
+        TestModeCard(
+            enabled = testMode,
+            trackedCount = testCount,
+            onToggle = { viewModel.setTestMode(it) }
         )
 
         // ---- Setup / permission cards ----
@@ -529,6 +542,68 @@ private fun LimitCard(limit: Int, onLimitChange: (Int) -> Unit) {
                 inactiveTrackColor = InkBorder
             )
         )
+    }
+}
+
+@Composable
+private fun TestModeCard(enabled: Boolean, trackedCount: Int, onToggle: (Boolean) -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(CardShape)
+            .background(InkElevated)
+            .border(1.dp, if (enabled) AmberWarn.copy(alpha = 0.5f) else InkBorder, CardShape)
+            .padding(horizontal = 18.dp, vertical = 16.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Detector test mode",
+                    color = TextPrimary,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Text(
+                    text = "Counts tracked shorts without touching your daily limit",
+                    color = TextSecondary,
+                    fontSize = 12.sp,
+                    lineHeight = 16.sp
+                )
+            }
+            Spacer(Modifier.width(12.dp))
+            Switch(
+                checked = enabled,
+                onCheckedChange = onToggle,
+                colors = SwitchDefaults.colors(
+                    checkedThumbColor = Ink,
+                    checkedTrackColor = AmberWarn,
+                    uncheckedThumbColor = TextSecondary,
+                    uncheckedTrackColor = InkBorder
+                )
+            )
+        }
+        if (enabled) {
+            Spacer(Modifier.height(14.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = "$trackedCount",
+                    color = AmberWarn,
+                    fontSize = 34.sp,
+                    fontWeight = FontWeight.Black
+                )
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    text = "shorts tracked\nthis test session",
+                    color = TextSecondary,
+                    fontSize = 12.sp,
+                    lineHeight = 15.sp
+                )
+            }
+        }
     }
 }
 
