@@ -64,9 +64,8 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.touchgrass.core.goals.GoalEngine
-import com.example.touchgrass.core.goals.PillarType
 import com.example.touchgrass.core.rewards.RewardsManager
+import com.example.touchgrass.features.reading.ReadingCredit
 import com.example.touchgrass.features.reading.data.BookRepository
 import com.example.touchgrass.features.reading.pdf.PdfBookRenderer
 import com.example.touchgrass.features.reading.quiz.QuizGenerationException
@@ -126,7 +125,7 @@ class ReaderViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
     private val repo: BookRepository,
     private val rewards: RewardsManager,
-    private val goalEngine: GoalEngine,
+    private val readingCredit: ReadingCredit,
     private val quizCoordinator: QuizCoordinator
 ) : ViewModel() {
 
@@ -265,10 +264,8 @@ class ReaderViewModel @Inject constructor(
             var earned = 0
             if (passed) {
                 repo.verifyPages(bookId, phase.pages)
-                phase.pages.forEach { rewards.awardPageRead(bookId, it) }
+                readingCredit.recordVerifiedPages(bookId, phase.pages)
                 earned = phase.pages.size * RewardsManager.POINTS_PER_PAGE
-                // Feed verified pages into any active reading pledge
-                goalEngine.recordProgress(PillarType.READING, phase.pages.size)
             }
             _quizPhase.value = PdfQuizPhase.Result(
                 correct = correct,

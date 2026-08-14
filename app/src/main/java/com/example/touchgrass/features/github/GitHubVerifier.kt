@@ -152,31 +152,9 @@ class GitHubVerifier @Inject constructor(
         var credited = false
         var missed = false
 
-        // 1. Reward: has a commit landed today (and not yet credited)?
-        if (state.lastSuccessDate != today.toString()) {
-            val committed = api.hasCommit(
-                config.owner, config.repo, config.author.ifBlank { null },
-                since = today.atStartOfDay(zone).toInstant(),
-                until = Instant.now(),
-                token = token
-            )
-            if (committed) {
-                val continues = state.lastSuccessDate == today.minusDays(1).toString()
-                val streak = if (continues) state.currentStreak + 1 else 1
-                state = state.copy(
-                    lastSuccessDate = today.toString(),
-                    currentStreak = streak,
-                    bestStreak = maxOf(state.bestStreak, streak)
-                )
-                g = g.copy(stateJson = encodeState(state))
-                goalDao.upsert(g)
-                rewards.award(goal.rewardPoints, "github_commit:${goal.id}:$today")
-                credited = true
-                Timber.tag("GitHub").i("%s/%s committed %s (streak %d)", config.owner, config.repo, today, streak)
-            }
-        }
-
-        // 2. Punish: finalize each fully-elapsed day that wasn't a success.
+        // 1. Punish FIRST: finalize each fully-elapsed day that wasn't a success.
+        // Settling before crediting today matters — a miss on an OLDER day must not
+        // zero the streak that today's commit is about to (re)start.
         val created = LocalDate.parse(state.createdDate)
         var day = state.lastSettledDate?.let { LocalDate.parse(it).plusDays(1) } ?: created
         if (day.isBefore(created)) day = created
@@ -201,6 +179,38 @@ class GitHubVerifier @Inject constructor(
             goalDao.upsert(g)
             day = day.plusDays(1)
             guard++
+        }
+
+        // 2. Reward: has a commit landed today (and not yet credited)?
+        if (state.lastSuccessDate != today.toString()) {
+            val committed = api.hasCommit(
+                config.owner, config.repo, config.author.ifBlank { null },
+                since = today.atStartOfDay(zone).toInstant(),
+                until = Instant.now(),
+                token = token
+            )
+            if (committed) {
+                val continues = state.lastSuccessDate == today.minusDays(1).toString()
+                val streak = if (continues) state.currentStreak + 1 else 1
+                state = state.copy(
+                    lastSuccessDate = today.toString(),
+                    currentStreak = streak,
+                    bestStreak = maxOf(state.bestStreak, streak)
+                )
+                g = g.copy(stateJson = encodeState(state))
+                goalDao.upsert(g)
+                rewards.award(goal.rewardPoints, "github_commit:${goal.id}:$today")
+                credited = true
+                Timber.tag("GitHub").i("%s/%s committed %s (streak %d)", config.owner, config.repo, today, streak)
+            }
+        }
+
+        // 3. Invariant: a commit today is always at least a 1-day streak. Also heals
+        // any goal left at streak 0 by the old reward-then-settle ordering.
+        if (state.lastSuccessDate == today.toString() && state.currentStreak < 1) {
+            state = state.copy(currentStreak = 1, bestStreak = maxOf(state.bestStreak, 1))
+            g = g.copy(stateJson = encodeState(state))
+            goalDao.upsert(g)
         }
 
         return when {

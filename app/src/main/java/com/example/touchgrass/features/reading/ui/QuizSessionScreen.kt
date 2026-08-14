@@ -55,9 +55,8 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.touchgrass.core.goals.GoalEngine
-import com.example.touchgrass.core.goals.PillarType
 import com.example.touchgrass.core.rewards.RewardsManager
+import com.example.touchgrass.features.reading.ReadingCredit
 import com.example.touchgrass.features.reading.data.BookRepository
 import com.example.touchgrass.features.reading.quiz.QuizGenerationException
 import com.example.touchgrass.features.reading.quiz.QuizCoordinator
@@ -111,7 +110,7 @@ class QuizSessionViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
     private val repo: BookRepository,
     private val rewards: RewardsManager,
-    private val goalEngine: GoalEngine,
+    private val readingCredit: ReadingCredit,
     private val quizCoordinator: QuizCoordinator
 ) : ViewModel() {
 
@@ -199,9 +198,8 @@ class QuizSessionViewModel @Inject constructor(
             if (passed) {
                 val pages = repo.creditPhysicalPages(bookId, state.photos.size)
                 credited = pages.size
-                pages.forEach { rewards.awardPageRead(bookId, it) }
+                readingCredit.recordVerifiedPages(bookId, pages)
                 earned = credited * RewardsManager.POINTS_PER_PAGE
-                goalEngine.recordProgress(PillarType.READING, credited)
                 // Session photos are consumed once credited
                 withContext(Dispatchers.IO) { state.photos.forEach(File::delete) }
             }
