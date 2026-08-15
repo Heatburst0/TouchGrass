@@ -48,6 +48,7 @@ class SettingsRepository @Inject constructor(
         val GOAL_LOCK_ENABLED = booleanPreferencesKey("goal_lock_enabled")
         val SHORTS_TEST_MODE = booleanPreferencesKey("shorts_test_mode")
         val GITHUB_GOALS_MIGRATED = booleanPreferencesKey("github_goals_migrated")
+        val PLEDGES_MIGRATED = booleanPreferencesKey("pledges_migrated")
     }
 
     val shortsLimit: Flow<Int> = context.dataStore.data
@@ -164,6 +165,13 @@ class SettingsRepository @Inject constructor(
 
     suspend fun setGithubGoalsMigrated(done: Boolean) {
         context.dataStore.edit { it[Keys.GITHUB_GOALS_MIGRATED] = done }
+    }
+
+    val pledgesMigrated: Flow<Boolean> = context.dataStore.data
+        .map { it[Keys.PLEDGES_MIGRATED] ?: false }
+
+    suspend fun setPledgesMigrated(done: Boolean) {
+        context.dataStore.edit { it[Keys.PLEDGES_MIGRATED] = done }
     }
 
     // ---- GitHub (optional PAT for private repos / higher rate limit) ----

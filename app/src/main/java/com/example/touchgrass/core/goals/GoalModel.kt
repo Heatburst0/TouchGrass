@@ -2,7 +2,7 @@ package com.example.touchgrass.core.goals
 
 /** Every trackable goal is one of these. Adding a type = new entry + a
  *  GoalVerifier bound into the registry. No engine/UI-hub changes. */
-enum class GoalType { SHORTS_LIMIT, GITHUB_COMMIT, READING, FOCUS_SESSION }
+enum class GoalType { SHORTS_LIMIT, GITHUB_COMMIT, READING, FOCUS_SESSION, TASK }
 
 /** ACHIEVE = do more → EARN points. LIMIT = stay under a cap or the stake is
  *  docked. Decides how a VerificationResult maps to the economy. */

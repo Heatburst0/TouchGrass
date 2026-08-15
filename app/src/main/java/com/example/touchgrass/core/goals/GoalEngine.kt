@@ -1,12 +1,16 @@
 package com.example.touchgrass.core.goals
 
+import com.example.touchgrass.core.data.SettingsRepository
 import com.example.touchgrass.core.data.db.CommitmentDao
 import com.example.touchgrass.core.data.db.CommitmentEntity
+import com.example.touchgrass.core.data.db.GoalDao
 import com.example.touchgrass.core.rewards.RewardsManager
 import com.example.touchgrass.di.ApplicationScope
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import timber.log.Timber
@@ -14,29 +18,43 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * The reward/punishment spine. Verified actions from any pillar call
- * [recordProgress]; the engine advances matching pledges, pays the bonus when
- * one is met, and — on [settleOverdue] — docks entertainment time for pledges
- * whose deadline passed unmet.
+ * The reward/punishment spine for pledges. As of the Goal+Verifier refactor
+ * (Step A) pledges are ONE_SHOT Task goals in the unified `goals` table, but this
+ * class keeps its exact public surface (create / recordProgress / settleOverdue /
+ * active + past commitments as [CommitmentEntity]) so the Goals UI, dashboard, and
+ * reading credit path were untouched.
  *
- * Reward and punishment both flow through [RewardsManager], so the economy has
- * exactly one door regardless of which pillar produced the event.
+ * Reward and punishment still flow through [RewardsManager] — one economy door.
  */
 @Singleton
 class GoalEngine @Inject constructor(
-    private val dao: CommitmentDao,
+    private val goalDao: GoalDao,
+    private val legacyDao: CommitmentDao,      // one-time migration of pre-refactor rows
     private val rewards: RewardsManager,
+    private val settings: SettingsRepository,
     @ApplicationScope private val scope: CoroutineScope
 ) {
-    val activeCommitments: StateFlow<List<CommitmentEntity>> = dao.observeActive()
-        .stateIn(scope, SharingStarted.Eagerly, emptyList())
+    val activeCommitments: StateFlow<List<CommitmentEntity>> =
+        goalDao.observeAll().map { all ->
+            all.filter { it.type == GoalType.TASK.name && it.active }
+                .sortedBy { it.deadlineAt ?: Long.MAX_VALUE }
+                .map { it.toCommitment() }
+        }.stateIn(scope, SharingStarted.Eagerly, emptyList())
 
-    val pastCommitments: StateFlow<List<CommitmentEntity>> = dao.observePast()
-        .stateIn(scope, SharingStarted.Eagerly, emptyList())
+    val pastCommitments: StateFlow<List<CommitmentEntity>> =
+        goalDao.observeAll().map { all ->
+            all.filter { it.type == GoalType.TASK.name && !it.active }
+                .sortedByDescending { it.deadlineAt ?: 0L }
+                .take(30)
+                .map { it.toCommitment() }
+        }.stateIn(scope, SharingStarted.Eagerly, emptyList())
 
     init {
-        // Settle anything that expired while the app was closed.
-        scope.launch { settleOverdue() }
+        scope.launch {
+            migrateLegacyPledges()
+            // Settle anything that expired while the app was closed.
+            settleOverdue()
+        }
     }
 
     fun createCommitment(
@@ -48,18 +66,15 @@ class GoalEngine @Inject constructor(
         penaltyShorts: Int
     ) {
         scope.launch {
-            dao.insert(
-                CommitmentEntity(
-                    pillar = pillar.name,
+            goalDao.upsert(
+                newPledgeGoal(
+                    pillar = pillar,
                     title = title.ifBlank { "${pillar.display} goal" },
-                    targetAmount = targetAmount.coerceAtLeast(1),
-                    unitLabel = pillar.unit,
-                    progress = 0,
-                    createdAt = System.currentTimeMillis(),
+                    target = targetAmount.coerceAtLeast(1),
                     deadlineAt = deadlineAt,
-                    rewardPoints = rewardPoints.coerceAtLeast(0),
-                    penaltyShorts = penaltyShorts.coerceAtLeast(0),
-                    status = CommitmentStatus.ACTIVE.name
+                    reward = rewardPoints.coerceAtLeast(0),
+                    penalty = penaltyShorts.coerceAtLeast(0),
+                    now = System.currentTimeMillis()
                 )
             )
             Timber.tag("Goals").i("New %s pledge: %d %s", pillar.display, targetAmount, pillar.unit)
@@ -76,26 +91,41 @@ class GoalEngine @Inject constructor(
         scope.launch {
             settleOverdue()
             val now = System.currentTimeMillis()
-            dao.activeForPillar(pillar.name, now).forEach { c ->
-                val newProgress = c.progress + units
-                if (newProgress >= c.targetAmount) {
-                    dao.update(c.copy(progress = c.targetAmount, status = CommitmentStatus.MET.name))
-                    rewards.award(c.rewardPoints, "commitment_met:${c.id}")
-                    Timber.tag("Goals").i("Pledge #%d MET (+%d pts)", c.id, c.rewardPoints)
-                } else {
-                    dao.update(c.copy(progress = newProgress))
+            goalDao.activeOfType(GoalType.TASK.name)
+                .filter { it.pledgeCategory() == pillar.name && (it.deadlineAt ?: Long.MAX_VALUE) >= now }
+                .forEach { g ->
+                    val newProgress = g.progress + units
+                    if (newProgress >= g.target) {
+                        goalDao.upsert(g.copy(progress = g.target).withStatus(CommitmentStatus.MET))
+                        rewards.award(g.rewardPoints, "commitment_met:${g.id}")
+                        Timber.tag("Goals").i("Pledge #%d MET (+%d pts)", g.id, g.rewardPoints)
+                    } else {
+                        goalDao.upsert(g.copy(progress = newProgress))
+                    }
                 }
-            }
         }
     }
 
     /** Marks expired active pledges MISSED and applies their screen-time penalty. */
     suspend fun settleOverdue() {
         val now = System.currentTimeMillis()
-        dao.overdue(now).forEach { c ->
-            dao.update(c.copy(status = CommitmentStatus.MISSED.name))
-            rewards.applyPenaltyShorts(c.penaltyShorts)
-            Timber.tag("Goals").i("Pledge #%d MISSED (-%d shorts)", c.id, c.penaltyShorts)
+        goalDao.activeOfType(GoalType.TASK.name)
+            .filter { (it.deadlineAt ?: Long.MAX_VALUE) < now }
+            .forEach { g ->
+                goalDao.upsert(g.withStatus(CommitmentStatus.MISSED))
+                rewards.applyPenaltyShorts(g.penaltyShorts)
+                Timber.tag("Goals").i("Pledge #%d MISSED (-%d shorts)", g.id, g.penaltyShorts)
+            }
+    }
+
+    private suspend fun migrateLegacyPledges() {
+        if (settings.pledgesMigrated.first()) return
+        val now = System.currentTimeMillis()
+        val legacy = legacyDao.observeActive().first() + legacyDao.observePast().first()
+        legacy.forEach { goalDao.upsert(it.toPledgeGoal(now)) }
+        settings.setPledgesMigrated(true)
+        if (legacy.isNotEmpty()) {
+            Timber.tag("Goals").i("Migrated %d pledge(s) into the goals table", legacy.size)
         }
     }
 }

@@ -1,7 +1,6 @@
 package com.example.touchgrass.features.github
 
 import com.example.touchgrass.core.data.SettingsRepository
-import com.example.touchgrass.core.data.db.CommitmentDao
 import com.example.touchgrass.core.data.db.GitHubGoalDao
 import com.example.touchgrass.core.data.db.GitHubGoalEntity
 import com.example.touchgrass.core.data.db.GoalDao
@@ -42,7 +41,6 @@ class GitHubGoalManager @Inject constructor(
     private val verifier: GitHubVerifier,
     private val api: GitHubApi,
     private val settings: SettingsRepository,
-    private val commitmentDao: CommitmentDao,
     @ApplicationScope private val scope: CoroutineScope
 ) {
 
@@ -60,9 +58,8 @@ class GitHubGoalManager @Inject constructor(
     val entertainmentLocked: StateFlow<Boolean> =
         combine(
             settings.goalLockEnabled,
-            goalDao.observeAll(),
-            commitmentDao.observeActive()
-        ) { enabled, allGoals, activeCommitments ->
+            goalDao.observeAll()
+        ) { enabled, allGoals ->
             if (!enabled) return@combine false
             val today = LocalDate.now().toString()
             val gitHubOwed = allGoals.any {
@@ -73,7 +70,10 @@ class GitHubGoalManager @Inject constructor(
             // in 3 days shouldn't block entertainment until its deadline is near.
             val startOfTomorrow = LocalDate.now().plusDays(1)
                 .atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
-            val pledgeOwed = activeCommitments.any { it.deadlineAt < startOfTomorrow }
+            val pledgeOwed = allGoals.any {
+                it.active && it.type == GoalType.TASK.name &&
+                    (it.deadlineAt ?: Long.MAX_VALUE) < startOfTomorrow
+            }
             gitHubOwed || pledgeOwed
         }.stateIn(scope, SharingStarted.Eagerly, false)
 
