@@ -49,37 +49,41 @@ class GoalEngine @Inject constructor(
                 .map { it.toCommitment() }
         }.stateIn(scope, SharingStarted.Eagerly, emptyList())
 
-    init {
-        scope.launch {
-            migrateLegacyPledges()
-            // Settle anything that expired while the app was closed.
-            settleOverdue()
-        }
-    }
+    /** Richer read models for the Goals screen (recurrence + streak aware). */
+    val activeGoals: StateFlow<List<GoalView>> =
+        goalDao.observeAll().map { all ->
+            all.filter { it.type == GoalType.TASK.name && it.active }
+                .sortedBy { it.deadlineAt ?: Long.MAX_VALUE }
+                .map { it.toGoalView() }
+        }.stateIn(scope, SharingStarted.Eagerly, emptyList())
+
+    val pastGoals: StateFlow<List<GoalView>> =
+        goalDao.observeAll().map { all ->
+            all.filter { it.type == GoalType.TASK.name && !it.active }
+                .sortedByDescending { it.deadlineAt ?: 0L }
+                .take(30)
+                .map { it.toGoalView() }
+        }.stateIn(scope, SharingStarted.Eagerly, emptyList())
+
+    init { scope.launch { migrateLegacyPledges(); settleOverdue(); settleRecurring() } }
+
 
     fun createCommitment(
-        pillar: PillarType,
-        title: String,
-        targetAmount: Int,
-        deadlineAt: Long,
-        rewardPoints: Int,
-        penaltyShorts: Int
+        pillar: PillarType, title: String, targetAmount: Int, deadlineAt: Long,
+        rewardPoints: Int, penaltyShorts: Int,
+        recurrence: Recurrence = Recurrence.Once           // NEW
     ) {
         scope.launch {
             goalDao.upsert(
-                newPledgeGoal(
-                    pillar = pillar,
-                    title = title.ifBlank { "${pillar.display} goal" },
-                    target = targetAmount.coerceAtLeast(1),
-                    deadlineAt = deadlineAt,
-                    reward = rewardPoints.coerceAtLeast(0),
-                    penalty = penaltyShorts.coerceAtLeast(0),
-                    now = System.currentTimeMillis()
-                )
+                newPledgeGoal(pillar, title.ifBlank { "${pillar.display} goal" },
+                    targetAmount.coerceAtLeast(1), deadlineAt,
+                    rewardPoints.coerceAtLeast(0), penaltyShorts.coerceAtLeast(0),
+                    System.currentTimeMillis(), recurrence)               // NEW arg
             )
-            Timber.tag("Goals").i("New %s pledge: %d %s", pillar.display, targetAmount, pillar.unit)
+            Timber.tag("Goals").i("New %s pledge (%s)", pillar.display, recurrence)
         }
     }
+
 
     /**
      * Report [units] of verified work for [pillar]. Advances every active,
@@ -89,22 +93,30 @@ class GoalEngine @Inject constructor(
     fun recordProgress(pillar: PillarType, units: Int) {
         if (units <= 0) return
         scope.launch {
-            settleOverdue()
+            settleOverdue(); settleRecurring()
             val now = System.currentTimeMillis()
             goalDao.activeOfType(GoalType.TASK.name)
-                .filter { it.pledgeCategory() == pillar.name && (it.deadlineAt ?: Long.MAX_VALUE) >= now }
+                .filter { it.pledgeCategory() == pillar.name }
                 .forEach { g ->
-                    val newProgress = g.progress + units
-                    if (newProgress >= g.target) {
-                        goalDao.upsert(g.copy(progress = g.target).withStatus(CommitmentStatus.MET))
-                        rewards.award(g.rewardPoints, "commitment_met:${g.id}")
-                        Timber.tag("Goals").i("Pledge #%d MET (+%d pts)", g.id, g.rewardPoints)
+                    if (g.recurrence() != Recurrence.Once) {
+                        if (g.metThisPeriod()) return@forEach
+                        val np = g.progress + units
+                        if (np >= g.target) {
+                            goalDao.upsert(g.copy(progress = g.target).withRecurringState(met = true))
+                            rewards.award(g.rewardPoints, "goal_met:${g.id}:period")
+                        } else goalDao.upsert(g.copy(progress = np))
                     } else {
-                        goalDao.upsert(g.copy(progress = newProgress))
+                        if ((g.deadlineAt ?: Long.MAX_VALUE) < now) return@forEach
+                        val np = g.progress + units
+                        if (np >= g.target) {
+                            goalDao.upsert(g.copy(progress = g.target).withStatus(CommitmentStatus.MET))
+                            rewards.award(g.rewardPoints, "commitment_met:${g.id}")
+                        } else goalDao.upsert(g.copy(progress = np))
                     }
                 }
         }
     }
+
 
     /** Marks expired active pledges MISSED and applies their screen-time penalty. */
     suspend fun settleOverdue() {
@@ -117,6 +129,33 @@ class GoalEngine @Inject constructor(
                 Timber.tag("Goals").i("Pledge #%d MISSED (-%d shorts)", g.id, g.penaltyShorts)
             }
     }
+
+    suspend fun settleRecurring() {
+        val now = System.currentTimeMillis()
+        val zone = java.time.ZoneId.systemDefault()
+        goalDao.activeOfType(GoalType.TASK.name)
+            .filter { it.recurrence() != Recurrence.Once }
+            .forEach { g0 ->
+                var g = g0
+                var guard = 0
+                while (g.periodEndAt() in 1..now && guard < 370) {
+                    g = if (g.metThisPeriod()) {
+                        val s = g.currentStreak() + 1
+                        g.withRecurringState(streak = s, best = maxOf(g.bestStreak(), s))
+                    } else {
+                        rewards.applyPenaltyShorts(g.penaltyShorts)
+                        g.withRecurringState(streak = 0)
+                    }
+                    val endDate = java.time.Instant.ofEpochMilli(g.periodEndAt())
+                        .atZone(zone).toLocalDate()
+                    val next = RecurrenceSchedule.periodAtOrAfter(g.recurrence(), endDate, zone) ?: break
+                    g = g.copy(progress = 0).withRecurringState(periodEndAt = next.endAt, met = false)
+                    goalDao.upsert(g)
+                    guard++
+                }
+            }
+    }
+
 
     private suspend fun migrateLegacyPledges() {
         if (settings.pledgesMigrated.first()) return

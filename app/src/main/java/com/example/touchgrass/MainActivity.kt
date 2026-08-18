@@ -1,9 +1,14 @@
 package com.example.touchgrass
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import com.example.touchgrass.core.goals.GoalEngine
 import com.example.touchgrass.presentation.navigation.TouchGrassAppRoot
@@ -18,9 +23,13 @@ class MainActivity : ComponentActivity() {
     @Inject
     lateinit var goalEngine: GoalEngine
 
+    private val requestNotifications =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { /* result ignored */ }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        maybeRequestNotificationPermission()
         val startRoute = intent.getStringExtra(EXTRA_START_ROUTE)
         setContent {
             TouchGrassTheme {
@@ -36,6 +45,16 @@ class MainActivity : ComponentActivity() {
         tryForceEnableAccessibility(this)
         // Settle any commitments whose deadline passed while we were away.
         lifecycleScope.launch { goalEngine.settleOverdue() }
+    }
+
+    /** Android 13+ needs a runtime grant to post notifications; ask once. */
+    private fun maybeRequestNotificationPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
+            != PackageManager.PERMISSION_GRANTED
+        ) {
+            requestNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
     }
 
     companion object {

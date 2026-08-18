@@ -32,7 +32,7 @@ fun GoalEntity.toCommitment(): CommitmentEntity = CommitmentEntity(
     unitLabel = unit,
     progress = progress,
     createdAt = createdAt,
-    deadlineAt = deadlineAt ?: 0L,
+    deadlineAt = if (recurrence() != Recurrence.Once) periodEndAt() else (deadlineAt ?: 0L),
     rewardPoints = rewardPoints,
     penaltyShorts = penaltyShorts,
     status = pledgeStatus().name
@@ -43,6 +43,27 @@ fun GoalEntity.withStatus(status: CommitmentStatus): GoalEntity = copy(
     active = status == CommitmentStatus.ACTIVE
 )
 
+fun GoalEntity.recurrence(): Recurrence =
+    RecurrenceSchedule.decode(JSONObject(configJson).optJSONObject("recurrence"))
+
+fun GoalEntity.currentStreak(): Int = JSONObject(stateJson).optInt("currentStreak", 0)
+fun GoalEntity.bestStreak(): Int = JSONObject(stateJson).optInt("bestStreak", 0)
+fun GoalEntity.periodEndAt(): Long = JSONObject(stateJson).optLong("periodEndAt", 0L)
+fun GoalEntity.metThisPeriod(): Boolean = JSONObject(stateJson).optBoolean("metThisPeriod", false)
+
+fun GoalEntity.withRecurringState(
+    streak: Int = currentStreak(),
+    best: Int = bestStreak(),
+    periodEndAt: Long = periodEndAt(),
+    met: Boolean = metThisPeriod()
+): GoalEntity = copy(
+    stateJson = JSONObject(stateJson)
+        .put("currentStreak", streak).put("bestStreak", best)
+        .put("periodEndAt", periodEndAt).put("metThisPeriod", met)
+        .toString()
+)
+
+
 fun newPledgeGoal(
     pillar: PillarType,
     title: String,
@@ -50,23 +71,37 @@ fun newPledgeGoal(
     deadlineAt: Long,
     reward: Int,
     penalty: Int,
-    now: Long
-): GoalEntity = GoalEntity(
-    type = GoalType.TASK.name,
-    title = title,
-    direction = GoalDirection.ACHIEVE.name,
-    schedule = GoalSchedule.ONE_SHOT.name,
-    target = target,
-    unit = pillar.unit,
-    progress = 0,
-    rewardPoints = reward,
-    penaltyShorts = penalty,
-    configJson = JSONObject().put("category", pillar.name).toString(),
-    stateJson = JSONObject().put("status", CommitmentStatus.ACTIVE.name).toString(),
-    active = true,
-    createdAt = now,
-    deadlineAt = deadlineAt
-)
+    now: Long,
+    recurrence: Recurrence = Recurrence.Once,
+    zone: java.time.ZoneId = java.time.ZoneId.systemDefault()
+): GoalEntity {
+    val recurring = recurrence != Recurrence.Once
+    val config = JSONObject()
+        .put("category", pillar.name)
+        .put("recurrence", RecurrenceSchedule.encode(recurrence))
+    val state = JSONObject().put("status", CommitmentStatus.ACTIVE.name)
+    if (recurring) {
+        val first = RecurrenceSchedule.periodAtOrAfter(recurrence, java.time.LocalDate.now(zone), zone)
+        state.put("currentStreak", 0).put("bestStreak", 0)
+            .put("periodEndAt", first?.endAt ?: 0L).put("metThisPeriod", false)
+    }
+    return GoalEntity(
+        type = GoalType.TASK.name,
+        title = title,
+        direction = GoalDirection.ACHIEVE.name,
+        schedule = if (recurring) GoalSchedule.ONGOING.name else GoalSchedule.ONE_SHOT.name,
+        target = target,
+        unit = pillar.unit,
+        progress = 0,
+        rewardPoints = reward,
+        penaltyShorts = penalty,
+        configJson = config.toString(),
+        stateJson = state.toString(),
+        active = true,
+        createdAt = now,
+        deadlineAt = if (recurring) null else deadlineAt
+    )
+}
 
 /** One-time migration of a legacy commitments row into a Task goal. */
 fun CommitmentEntity.toPledgeGoal(now: Long): GoalEntity = GoalEntity(
@@ -84,4 +119,45 @@ fun CommitmentEntity.toPledgeGoal(now: Long): GoalEntity = GoalEntity(
     active = status == CommitmentStatus.ACTIVE.name,
     createdAt = createdAt,
     deadlineAt = deadlineAt
+)
+
+/**
+ * Richer read model for the Goals UI — carries recurrence + streak, which the
+ * legacy [CommitmentEntity] DTO can't (it's still a Room entity for the old
+ * table). The dashboard keeps using CommitmentEntity for its simple row.
+ */
+data class GoalView(
+    val id: Long,
+    val category: String,
+    val title: String,
+    val target: Int,
+    val unit: String,
+    val progress: Int,
+    val status: CommitmentStatus,
+    val recurrence: Recurrence,
+    val currentStreak: Int,
+    val bestStreak: Int,
+    val deadlineAt: Long?,     // ONCE goals
+    val periodEndAt: Long,     // recurring goals
+    val rewardPoints: Int,
+    val penaltyShorts: Int
+) {
+    val isRecurring: Boolean get() = recurrence != Recurrence.Once
+}
+
+fun GoalEntity.toGoalView(): GoalView = GoalView(
+    id = id,
+    category = pledgeCategory(),
+    title = title,
+    target = target,
+    unit = unit,
+    progress = progress,
+    status = pledgeStatus(),
+    recurrence = recurrence(),
+    currentStreak = currentStreak(),
+    bestStreak = bestStreak(),
+    deadlineAt = deadlineAt,
+    periodEndAt = periodEndAt(),
+    rewardPoints = rewardPoints,
+    penaltyShorts = penaltyShorts
 )

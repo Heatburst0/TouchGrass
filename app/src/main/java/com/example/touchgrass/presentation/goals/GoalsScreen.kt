@@ -3,9 +3,13 @@ package com.example.touchgrass.presentation.goals
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -48,11 +52,12 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.touchgrass.core.data.SettingsRepository
-import com.example.touchgrass.core.data.db.CommitmentEntity
 import com.example.touchgrass.core.data.db.GitHubGoalEntity
 import com.example.touchgrass.core.goals.CommitmentStatus
 import com.example.touchgrass.core.goals.GoalEngine
+import com.example.touchgrass.core.goals.GoalView
 import com.example.touchgrass.core.goals.PillarType
+import com.example.touchgrass.core.goals.Recurrence
 import com.example.touchgrass.core.rewards.RewardsManager
 import com.example.touchgrass.features.github.GitHubGoalManager
 import com.example.touchgrass.ui.theme.AmberWarn
@@ -70,6 +75,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import java.time.DayOfWeek
 import java.time.LocalDate
 import javax.inject.Inject
 import kotlin.math.roundToInt
@@ -80,8 +86,8 @@ class GoalsViewModel @Inject constructor(
     private val gitHubManager: GitHubGoalManager,
     private val settings: SettingsRepository
 ) : ViewModel() {
-    val active: StateFlow<List<CommitmentEntity>> = goalEngine.activeCommitments
-    val past: StateFlow<List<CommitmentEntity>> = goalEngine.pastCommitments
+    val active: StateFlow<List<GoalView>> = goalEngine.activeGoals
+    val past: StateFlow<List<GoalView>> = goalEngine.pastGoals
 
     val gitHubGoals: StateFlow<List<GitHubGoalEntity>> = gitHubManager.goals
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -97,7 +103,7 @@ class GoalsViewModel @Inject constructor(
         viewModelScope.launch { gitHubManager.runChecks() }
     }
 
-    fun create(pillar: PillarType, title: String, target: Int, hours: Int) {
+    fun create(pillar: PillarType, title: String, target: Int, hours: Int, recurrence: Recurrence) {
         val deadline = System.currentTimeMillis() + hours.toLong() * 3_600_000L
         goalEngine.createCommitment(
             pillar = pillar,
@@ -106,7 +112,8 @@ class GoalsViewModel @Inject constructor(
             deadlineAt = deadline,
             // Bonus on top of the per-page points; penalty scales with the pledge.
             rewardPoints = target * RewardsManager.POINTS_PER_PAGE,
-            penaltyShorts = target.coerceIn(1, 10)
+            penaltyShorts = target.coerceIn(1, 10),
+            recurrence = recurrence
         )
     }
 
@@ -161,8 +168,8 @@ fun GoalsScreen(viewModel: GoalsViewModel = hiltViewModel()) {
     if (showCreate) {
         CreateCommitmentDialog(
             deadlineChoices = viewModel.deadlineChoices,
-            onConfirm = { pillar, title, target, hours ->
-                viewModel.create(pillar, title, target, hours)
+            onConfirm = { pillar, title, target, hours, recurrence ->
+                viewModel.create(pillar, title, target, hours, recurrence)
                 showCreate = false
             },
             onDismiss = { showCreate = false }
@@ -274,12 +281,12 @@ fun GoalsScreen(viewModel: GoalsViewModel = hiltViewModel()) {
 
         if (active.isNotEmpty()) {
             item { SectionLabel("Active") }
-            items(active, key = { it.id }) { CommitmentCard(it) }
+            items(active, key = { it.id }) { GoalCard(it) }
         }
 
         if (past.isNotEmpty()) {
             item { SectionLabel("History") }
-            items(past, key = { it.id }) { CommitmentCard(it) }
+            items(past, key = { it.id }) { GoalCard(it) }
         }
 
         if (active.isEmpty() && past.isEmpty() && gitHubGoals.isEmpty()) {
@@ -313,14 +320,14 @@ private fun SectionLabel(text: String) {
 }
 
 @Composable
-private fun CommitmentCard(c: CommitmentEntity) {
-    val status = runCatching { CommitmentStatus.valueOf(c.status) }.getOrDefault(CommitmentStatus.ACTIVE)
-    val progressFrac = if (c.targetAmount > 0) c.progress.toFloat() / c.targetAmount else 0f
-    val accent = when (status) {
+private fun GoalCard(g: GoalView) {
+    val progressFrac = if (g.target > 0) g.progress.toFloat() / g.target else 0f
+    val accent = when (g.status) {
         CommitmentStatus.ACTIVE -> GrassGreen
         CommitmentStatus.MET -> GrassGreen
         CommitmentStatus.MISSED -> DangerRed
     }
+    val showBar = g.isRecurring || g.status == CommitmentStatus.ACTIVE
 
     Column(
         modifier = Modifier
@@ -336,23 +343,36 @@ private fun CommitmentCard(c: CommitmentEntity) {
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                text = c.title,
+                text = g.title,
                 color = TextPrimary,
                 fontSize = 16.sp,
                 fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.weight(1f)
             )
-            StatusTag(status, accent)
+            if (g.isRecurring) RecurrenceTag(g.recurrence) else StatusTag(g.status, accent)
         }
         Spacer(Modifier.height(4.dp))
         Text(
-            text = "${c.progress}/${c.targetAmount} ${c.unitLabel}  ·  " +
-                    if (status == CommitmentStatus.ACTIVE) timeLeft(c.deadlineAt) else "closed",
+            text = "${g.progress}/${g.target} ${g.unit}  ·  " + when {
+                g.isRecurring -> "resets ${timeLeft(g.periodEndAt)}"
+                g.status == CommitmentStatus.ACTIVE -> timeLeft(g.deadlineAt ?: 0L)
+                else -> "closed"
+            },
             color = TextSecondary,
             fontSize = 12.sp
         )
 
-        if (status == CommitmentStatus.ACTIVE) {
+        if (g.isRecurring) {
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = "🔥 ${g.currentStreak}-${streakUnit(g.recurrence)} streak" +
+                        if (g.bestStreak > g.currentStreak) "   ·   best ${g.bestStreak}" else "",
+                color = TextSecondary,
+                fontSize = 13.sp
+            )
+        }
+
+        if (showBar) {
             Spacer(Modifier.height(10.dp))
             Box(
                 modifier = Modifier
@@ -366,18 +386,45 @@ private fun CommitmentCard(c: CommitmentEntity) {
                         .fillMaxWidth(progressFrac.coerceIn(0f, 1f))
                         .height(6.dp)
                         .clip(RoundedCornerShape(3.dp))
-                        .background(GrassGreen)
+                        .background(accent)
                 )
             }
         }
 
         Spacer(Modifier.height(8.dp))
         Text(
-            text = "Win +${c.rewardPoints} pts   ·   Miss -${c.penaltyShorts} shorts",
+            text = "Win +${g.rewardPoints} pts   ·   Miss -${g.penaltyShorts} shorts" +
+                    if (g.isRecurring) " / ${streakUnit(g.recurrence)}" else "",
             color = TextSecondary,
             fontSize = 11.sp
         )
     }
+}
+
+private fun streakUnit(r: Recurrence): String = when (r) {
+    Recurrence.Weekly -> "week"
+    else -> "day"
+}
+
+@Composable
+private fun RecurrenceTag(r: Recurrence) {
+    val label = when (r) {
+        Recurrence.Daily -> "DAILY"
+        Recurrence.Weekly -> "WEEKLY"
+        is Recurrence.Custom -> "CUSTOM"
+        Recurrence.Once -> "ONCE"
+    }
+    Text(
+        text = label,
+        color = GrassGreen,
+        fontSize = 10.sp,
+        fontWeight = FontWeight.Bold,
+        letterSpacing = 1.sp,
+        modifier = Modifier
+            .clip(RoundedCornerShape(50))
+            .background(GrassGreen.copy(alpha = 0.12f))
+            .padding(horizontal = 8.dp, vertical = 3.dp)
+    )
 }
 
 @Composable
@@ -400,10 +447,11 @@ private fun StatusTag(status: CommitmentStatus, accent: androidx.compose.ui.grap
     )
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun CreateCommitmentDialog(
     deadlineChoices: List<Pair<String, Int>>,
-    onConfirm: (PillarType, String, Int, Int) -> Unit,
+    onConfirm: (PillarType, String, Int, Int, Recurrence) -> Unit,
     onDismiss: () -> Unit
 ) {
     // Only Reading is wired to auto-verify today; others arrive with their pillars.
@@ -411,13 +459,24 @@ private fun CreateCommitmentDialog(
     var title by remember { mutableStateOf("") }
     var target by remember { mutableIntStateOf(5) }
     var deadlineIndex by remember { mutableIntStateOf(0) }
+    var recIndex by remember { mutableIntStateOf(0) } // 0 Once, 1 Daily, 2 Weekly, 3 Custom
+    var customDays by remember { mutableStateOf(emptySet<DayOfWeek>()) }
+
+    val recurrence: Recurrence = when (recIndex) {
+        1 -> Recurrence.Daily
+        2 -> Recurrence.Weekly
+        3 -> Recurrence.Custom(customDays)
+        else -> Recurrence.Once
+    }
+    val periodWord = when (recIndex) { 1 -> "day"; 2 -> "week"; 3 -> "active day"; else -> "" }
+    val canConfirm = recIndex != 3 || customDays.isNotEmpty()
 
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = InkElevated,
         title = { Text("New reading pledge", color = TextPrimary, fontWeight = FontWeight.Bold) },
         text = {
-            Column {
+            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                 OutlinedTextField(
                     value = title,
                     onValueChange = { title = it },
@@ -433,58 +492,119 @@ private fun CreateCommitmentDialog(
                 )
                 Spacer(Modifier.height(16.dp))
 
-                Text("Pages: $target", color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                Text("Repeat", color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(6.dp))
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    listOf("Once", "Daily", "Weekly", "Custom").forEachIndexed { i, label ->
+                        ChoiceChip(label, selected = i == recIndex) { recIndex = i }
+                    }
+                }
+
+                if (recIndex == 3) {
+                    Spacer(Modifier.height(10.dp))
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        DayOfWeek.values().forEach { d ->
+                            val sel = d in customDays
+                            DayChip(d.name.take(1), sel) {
+                                customDays = if (sel) customDays - d else customDays + d
+                            }
+                        }
+                    }
+                }
+
+                Spacer(Modifier.height(16.dp))
+                Text(
+                    text = if (periodWord.isEmpty()) "Pages: $target" else "Pages per $periodWord: $target",
+                    color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold
+                )
                 Spacer(Modifier.height(6.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Stepper("-", enabled = target > 1) { target-- }
                     Stepper("+", enabled = target < 50) { target++ }
                 }
 
-                Spacer(Modifier.height(16.dp))
-                Text("Deadline", color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-                Spacer(Modifier.height(6.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    deadlineChoices.forEachIndexed { i, (label, _) ->
-                        val selected = i == deadlineIndex
-                        Text(
-                            text = label,
-                            color = if (selected) Ink else TextPrimary,
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(50))
-                                .background(if (selected) GrassGreen else Ink)
-                                .border(
-                                    1.dp,
-                                    if (selected) GrassGreen else InkBorder,
-                                    RoundedCornerShape(50)
-                                )
-                                .clickable { deadlineIndex = i }
-                                .padding(horizontal = 14.dp, vertical = 7.dp)
-                        )
+                if (recIndex == 0) {
+                    Spacer(Modifier.height(16.dp))
+                    Text("Deadline", color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                    Spacer(Modifier.height(6.dp))
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        deadlineChoices.forEachIndexed { i, (label, _) ->
+                            ChoiceChip(label, selected = i == deadlineIndex) { deadlineIndex = i }
+                        }
                     }
                 }
 
                 Spacer(Modifier.height(14.dp))
                 Text(
                     text = "Win +${target * RewardsManager.POINTS_PER_PAGE} pts   ·   " +
-                            "Miss -${target.coerceIn(1, 10)} shorts today",
+                            "Miss -${target.coerceIn(1, 10)} shorts" +
+                            if (periodWord.isEmpty()) " today" else " / $periodWord",
                     color = AmberWarn,
                     fontSize = 12.sp
                 )
             }
         },
         confirmButton = {
-            TextButton(onClick = {
-                onConfirm(pillar, title, target, deadlineChoices[deadlineIndex].second)
-            }) {
-                Text("Pledge", color = GrassGreen, fontWeight = FontWeight.Bold)
+            TextButton(
+                onClick = { onConfirm(pillar, title, target, deadlineChoices[deadlineIndex].second, recurrence) },
+                enabled = canConfirm
+            ) {
+                Text(
+                    "Pledge",
+                    color = if (canConfirm) GrassGreen else TextSecondary,
+                    fontWeight = FontWeight.Bold
+                )
             }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) { Text("Cancel", color = TextSecondary) }
         }
     )
+}
+
+@Composable
+private fun ChoiceChip(label: String, selected: Boolean, onClick: () -> Unit) {
+    Text(
+        text = label,
+        color = if (selected) Ink else TextPrimary,
+        fontSize = 13.sp,
+        fontWeight = FontWeight.SemiBold,
+        modifier = Modifier
+            .clip(RoundedCornerShape(50))
+            .background(if (selected) GrassGreen else Ink)
+            .border(1.dp, if (selected) GrassGreen else InkBorder, RoundedCornerShape(50))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 7.dp)
+    )
+}
+
+@Composable
+private fun DayChip(label: String, selected: Boolean, onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .size(32.dp)
+            .clip(CircleShape)
+            .background(if (selected) GrassGreen else Ink)
+            .border(1.dp, if (selected) GrassGreen else InkBorder, CircleShape)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = label,
+            color = if (selected) Ink else TextPrimary,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Bold
+        )
+    }
 }
 
 @Composable

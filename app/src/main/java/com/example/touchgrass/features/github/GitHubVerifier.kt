@@ -11,6 +11,8 @@ import com.example.touchgrass.core.goals.GoalTypeKey
 import com.example.touchgrass.core.goals.GoalVerifier
 import com.example.touchgrass.core.goals.VerificationCadence
 import com.example.touchgrass.core.goals.VerificationResult
+import com.example.touchgrass.core.notifications.NotifChannel
+import com.example.touchgrass.core.notifications.Notifier
 import com.example.touchgrass.core.rewards.RewardsManager
 import dagger.Binds
 import dagger.Module
@@ -136,7 +138,8 @@ class GitHubVerifier @Inject constructor(
     private val goalDao: GoalDao,
     private val api: GitHubApi,
     private val rewards: RewardsManager,
-    private val settings: SettingsRepository
+    private val settings: SettingsRepository,
+    private val notifier: Notifier
 ) : GoalVerifier {
 
     override val type = GoalType.GITHUB_COMMIT
@@ -202,6 +205,12 @@ class GitHubVerifier @Inject constructor(
                 rewards.award(goal.rewardPoints, "github_commit:${goal.id}:$today")
                 credited = true
                 Timber.tag("GitHub").i("%s/%s committed %s (streak %d)", config.owner, config.repo, today, streak)
+                notifier.post(
+                    channel = NotifChannel.GOALS,
+                    id = Notifier.Ids.commit(goal.id),
+                    title = "Commit logged ✅",
+                    body = "${config.owner}/${config.repo} — $streak-day streak. Keep it going."
+                )
             }
         }
 
