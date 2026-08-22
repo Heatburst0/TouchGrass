@@ -12,7 +12,7 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import com.example.touchgrass.core.notifications.ServiceReminderWorker
 import com.example.touchgrass.core.screentime.ScreenTimeNudger
-import com.example.touchgrass.features.github.GitHubCheckWorker
+import com.example.touchgrass.work.GoalMaintenanceWorker
 import dagger.hilt.android.HiltAndroidApp
 import timber.log.Timber
 import java.util.concurrent.TimeUnit
@@ -48,14 +48,17 @@ class TouchGrassApp : Application(), Configuration.Provider {
             }
         )
 
-        scheduleGitHubChecks()
+        // Retire the old GitHub-only periodic worker (its class no longer exists).
+        WorkManager.getInstance(this).cancelUniqueWork("github_daily_check")
+        scheduleGoalMaintenance()
         scheduleServiceReminder()
     }
 
-    /** Poll GitHub goals in the background (~every 3h) so misses settle even
-     *  when the app is never opened that day. KEEP = don't reset the schedule. */
-    private fun scheduleGitHubChecks() {
-        val request = PeriodicWorkRequestBuilder<GitHubCheckWorker>(3, TimeUnit.HOURS)
+    /** Background maintenance (~every 3h): GitHub poll + one-shot & recurring goal
+     *  settlement, so misses and streaks settle even when the app is never opened
+     *  that day. KEEP = don't reset the schedule. */
+    private fun scheduleGoalMaintenance() {
+        val request = PeriodicWorkRequestBuilder<GoalMaintenanceWorker>(3, TimeUnit.HOURS)
             .setConstraints(
                 Constraints.Builder()
                     .setRequiredNetworkType(NetworkType.CONNECTED)
@@ -63,7 +66,7 @@ class TouchGrassApp : Application(), Configuration.Provider {
             )
             .build()
         WorkManager.getInstance(this).enqueueUniquePeriodicWork(
-            GitHubCheckWorker.UNIQUE_NAME,
+            GoalMaintenanceWorker.UNIQUE_NAME,
             ExistingPeriodicWorkPolicy.KEEP,
             request
         )

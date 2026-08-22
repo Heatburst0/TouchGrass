@@ -43,8 +43,12 @@ class MainActivity : ComponentActivity() {
         // If the system flipped our service off and we hold WRITE_SECURE_SETTINGS
         // (adb grant), silently flip it back on.
         tryForceEnableAccessibility(this)
-        // Settle any commitments whose deadline passed while we were away.
-        lifecycleScope.launch { goalEngine.settleOverdue() }
+        // Settle anything that elapsed while we were away — one-shot deadlines and
+        // recurring-goal period boundaries — so it's current the instant you open.
+        lifecycleScope.launch {
+            goalEngine.settleOverdue()
+            goalEngine.settleRecurring()
+        }
     }
 
     /** Android 13+ needs a runtime grant to post notifications; ask once. */
