@@ -65,6 +65,19 @@
                 android:resource="@xml/file_paths" />
         </provider>
 
+        <!-- Remove WorkManager's default initializer so our Configuration.Provider
+             (with the HiltWorkerFactory) is used — required to build @HiltWorker classes. -->
+        <provider
+            android:name="androidx.startup.InitializationProvider"
+            android:authorities="${applicationId}.androidx-startup"
+            android:exported="false"
+            tools:node="merge">
+            <meta-data
+                android:name="androidx.work.WorkManagerInitializer"
+                android:value="androidx.startup"
+                tools:node="remove" />
+        </provider>
+
         <service
             android:name=".core.service.InspectorService"
             android:exported="true"
