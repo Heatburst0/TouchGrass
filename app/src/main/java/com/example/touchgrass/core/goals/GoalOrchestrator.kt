@@ -65,19 +65,32 @@ class GoalOrchestrator @Inject constructor(
      * reward when they reach target; any goal that Fails a cycle is docked its stake.
      */
     private suspend fun applyResult(goal: GoalEntity, result: VerificationResult) {
+        val recurring = goal.recurrence() != Recurrence.Once
         when (result) {
             is VerificationResult.Progress -> {
-                val newProgress = goal.progress + result.amount
-                if (newProgress >= goal.target) {
-                    goalDao.upsert(goal.copy(progress = goal.target))
-                    reward(goal, "goal_met:${goal.id}")
+                if (recurring) {
+                    val (updated, metNow) = goal.addRecurringProgress(result.amount)
+                    goalDao.upsert(updated)
+                    if (metNow) reward(goal, "goal_met:${goal.id}:period")
                 } else {
-                    goalDao.upsert(goal.copy(progress = newProgress))
+                    val newProgress = goal.progress + result.amount
+                    if (newProgress >= goal.target) {
+                        goalDao.upsert(goal.copy(progress = goal.target))
+                        reward(goal, "goal_met:${goal.id}")
+                    } else {
+                        goalDao.upsert(goal.copy(progress = newProgress))
+                    }
                 }
             }
             VerificationResult.Passed -> {
-                goalDao.upsert(goal.copy(progress = maxOf(goal.progress, goal.target)))
-                reward(goal, "goal_passed:${goal.id}")
+                if (recurring) {
+                    val (updated, metNow) = goal.addRecurringProgress(goal.target)
+                    goalDao.upsert(updated)
+                    if (metNow) reward(goal, "goal_passed:${goal.id}:period")
+                } else {
+                    goalDao.upsert(goal.copy(progress = maxOf(goal.progress, goal.target)))
+                    reward(goal, "goal_passed:${goal.id}")
+                }
             }
             VerificationResult.Failed -> {
                 if (goal.penaltyShorts > 0) rewards.applyPenaltyShorts(goal.penaltyShorts)

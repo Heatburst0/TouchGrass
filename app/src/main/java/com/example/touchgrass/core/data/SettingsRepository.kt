@@ -49,6 +49,7 @@ class SettingsRepository @Inject constructor(
         val SHORTS_TEST_MODE = booleanPreferencesKey("shorts_test_mode")
         val GITHUB_GOALS_MIGRATED = booleanPreferencesKey("github_goals_migrated")
         val PLEDGES_MIGRATED = booleanPreferencesKey("pledges_migrated")
+        val GITHUB_RECURRING_MIGRATED = booleanPreferencesKey("github_recurring_migrated")
     }
 
     val shortsLimit: Flow<Int> = context.dataStore.data
@@ -172,6 +173,13 @@ class SettingsRepository @Inject constructor(
 
     suspend fun setPledgesMigrated(done: Boolean) {
         context.dataStore.edit { it[Keys.PLEDGES_MIGRATED] = done }
+    }
+
+    val githubRecurringMigrated: Flow<Boolean> = context.dataStore.data
+        .map { it[Keys.GITHUB_RECURRING_MIGRATED] ?: false }
+
+    suspend fun setGithubRecurringMigrated(done: Boolean) {
+        context.dataStore.edit { it[Keys.GITHUB_RECURRING_MIGRATED] = done }
     }
 
     // ---- GitHub (optional PAT for private repos / higher rate limit) ----

@@ -123,12 +123,13 @@ class GoalsViewModel @Inject constructor(
         repo: String,
         author: String,
         token: String,
+        recurrence: Recurrence,
         onSuccess: () -> Unit
     ) {
         viewModelScope.launch {
             _gitHubError.value = null
             if (token.isNotBlank()) settings.setGithubToken(token)
-            val error = gitHubManager.addGoal(owner, repo, author)
+            val error = gitHubManager.addGoal(owner, repo, author, recurrence)
             if (error == null) {
                 gitHubManager.runChecks()
                 onSuccess()
@@ -179,9 +180,9 @@ fun GoalsScreen(viewModel: GoalsViewModel = hiltViewModel()) {
     if (showGitHub) {
         CreateGitHubGoalDialog(
             error = gitHubError,
-            onConfirm = { owner, repo, author, token ->
+            onConfirm = { owner, repo, author, token, recurrence ->
                 // Dialog closes only if the repo validates (onSuccess callback).
-                viewModel.createGitHubGoal(owner, repo, author, token) {
+                viewModel.createGitHubGoal(owner, repo, author, token, recurrence) {
                     showGitHub = false
                 }
             },
@@ -673,25 +674,35 @@ private fun GitHubGoalCard(goal: GitHubGoalEntity, onRemove: () -> Unit) {
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun CreateGitHubGoalDialog(
     error: String?,
-    onConfirm: (owner: String, repo: String, author: String, token: String) -> Unit,
+    onConfirm: (owner: String, repo: String, author: String, token: String, recurrence: Recurrence) -> Unit,
     onDismiss: () -> Unit
 ) {
     var owner by remember { mutableStateOf("") }
     var repo by remember { mutableStateOf("") }
     var author by remember { mutableStateOf("") }
     var token by remember { mutableStateOf("") }
+    var recIndex by remember { mutableIntStateOf(0) } // 0 Daily, 1 Weekly, 2 Custom
+    var customDays by remember { mutableStateOf(emptySet<DayOfWeek>()) }
+
+    val recurrence: Recurrence = when (recIndex) {
+        1 -> Recurrence.Weekly
+        2 -> Recurrence.Custom(customDays)
+        else -> Recurrence.Daily
+    }
+    val canTrack = owner.isNotBlank() && repo.isNotBlank() && (recIndex != 2 || customDays.isNotEmpty())
 
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = InkElevated,
         title = { Text("Track a GitHub repo", color = TextPrimary, fontWeight = FontWeight.Bold) },
         text = {
-            Column {
+            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                 Text(
-                    text = "Commit to this repo every day to earn screen time; miss a day and lose some. Verified straight from GitHub.",
+                    text = "Commit to this repo to earn screen time; miss a period and lose some. Verified straight from GitHub.",
                     color = TextSecondary,
                     fontSize = 13.sp,
                     lineHeight = 18.sp
@@ -704,6 +715,33 @@ private fun CreateGitHubGoalDialog(
                 DialogField(author, { author = it }, "Your GitHub username (optional)")
                 Spacer(Modifier.height(8.dp))
                 DialogField(token, { token = it }, "Token — only for private repos (optional)")
+
+                Spacer(Modifier.height(12.dp))
+                Text("Commit", color = TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(6.dp))
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    listOf("Daily", "Weekly", "Custom").forEachIndexed { i, label ->
+                        ChoiceChip(label, selected = i == recIndex) { recIndex = i }
+                    }
+                }
+                if (recIndex == 2) {
+                    Spacer(Modifier.height(8.dp))
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        DayOfWeek.values().forEach { d ->
+                            val sel = d in customDays
+                            DayChip(d.name.take(1), sel) {
+                                customDays = if (sel) customDays - d else customDays + d
+                            }
+                        }
+                    }
+                }
+
                 Spacer(Modifier.height(8.dp))
                 Text(
                     text = "Leave username blank to count any commit to the repo. A token is only needed for private repos.",
@@ -721,12 +759,12 @@ private fun CreateGitHubGoalDialog(
         },
         confirmButton = {
             TextButton(
-                onClick = { onConfirm(owner, repo, author, token) },
-                enabled = owner.isNotBlank() && repo.isNotBlank()
+                onClick = { onConfirm(owner, repo, author, token, recurrence) },
+                enabled = canTrack
             ) {
                 Text(
                     "Track",
-                    color = if (owner.isNotBlank() && repo.isNotBlank()) GrassGreen else TextSecondary,
+                    color = if (canTrack) GrassGreen else TextSecondary,
                     fontWeight = FontWeight.Bold
                 )
             }

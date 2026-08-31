@@ -2,18 +2,25 @@ package com.example.touchgrass.features.github
 
 import com.example.touchgrass.core.data.SettingsRepository
 import com.example.touchgrass.core.data.db.GitHubGoalEntity
-import com.example.touchgrass.core.data.db.GoalDao
 import com.example.touchgrass.core.data.db.GoalEntity
 import com.example.touchgrass.core.goals.GoalDirection
 import com.example.touchgrass.core.goals.GoalSchedule
 import com.example.touchgrass.core.goals.GoalType
 import com.example.touchgrass.core.goals.GoalTypeKey
 import com.example.touchgrass.core.goals.GoalVerifier
+import com.example.touchgrass.core.goals.Recurrence
+import com.example.touchgrass.core.goals.RecurrenceSchedule
 import com.example.touchgrass.core.goals.VerificationCadence
 import com.example.touchgrass.core.goals.VerificationResult
+import com.example.touchgrass.core.goals.bestStreak
+import com.example.touchgrass.core.goals.currentStreak
+import com.example.touchgrass.core.goals.initialRecurringState
+import com.example.touchgrass.core.goals.metThisPeriod
+import com.example.touchgrass.core.goals.periodEndAt
+import com.example.touchgrass.core.goals.recurrence
+import com.example.touchgrass.core.goals.withRecurringState
 import com.example.touchgrass.core.notifications.NotifChannel
 import com.example.touchgrass.core.notifications.Notifier
-import com.example.touchgrass.core.rewards.RewardsManager
 import dagger.Binds
 import dagger.Module
 import dagger.hilt.InstallIn
@@ -21,7 +28,6 @@ import dagger.hilt.components.SingletonComponent
 import dagger.multibindings.IntoMap
 import kotlinx.coroutines.flow.first
 import org.json.JSONObject
-import timber.log.Timber
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -29,19 +35,18 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 // ---------------------------------------------------------------------------
-// JSON codec: a GITHUB_COMMIT goal stores its immutable "what to track" in
-// GoalEntity.configJson and its mutable "how it's going" in stateJson, so a new
-// goal type never needs a schema migration.
+// Codec. A GITHUB_COMMIT goal is a RECURRING goal (Option B): its repo lives in
+// configJson (with a recurrence, like a reading goal), and its streak lives in
+// the shared recurring state (periodEndAt / metThisPeriod / currentStreak). The
+// engine settles it exactly like any other recurring goal.
 // ---------------------------------------------------------------------------
 
-/** Immutable config — the repo to watch. */
+/** Immutable config — the repo to watch. Recurrence is read via [recurrence]. */
 data class GitHubConfig(val owner: String, val repo: String, val author: String)
 
-/** Mutable runtime — streak + settlement bookkeeping. */
+/** Legacy (pre-Option-B) state — read only, to reshape old rows into recurring state. */
 data class GitHubState(
-    val createdDate: String,
     val lastSuccessDate: String? = null,
-    val lastSettledDate: String? = null,
     val currentStreak: Int = 0,
     val bestStreak: Int = 0
 )
@@ -51,93 +56,96 @@ fun GoalEntity.gitHubConfig(): GitHubConfig {
     return GitHubConfig(o.optString("owner"), o.optString("repo"), o.optString("author"))
 }
 
-fun GoalEntity.gitHubState(): GitHubState {
+private fun GoalEntity.legacyGitHubState(): GitHubState {
     val o = JSONObject(stateJson)
-    fun nstr(k: String) = if (o.has(k) && !o.isNull(k)) o.getString(k) else null
-    return GitHubState(
-        createdDate = o.optString("createdDate", LocalDate.now().toString()),
-        lastSuccessDate = nstr("lastSuccessDate"),
-        lastSettledDate = nstr("lastSettledDate"),
-        currentStreak = o.optInt("currentStreak", 0),
-        bestStreak = o.optInt("bestStreak", 0)
-    )
+    val ls = if (o.has("lastSuccessDate") && !o.isNull("lastSuccessDate")) o.getString("lastSuccessDate") else null
+    return GitHubState(ls, o.optInt("currentStreak", 0), o.optInt("bestStreak", 0))
 }
 
-private fun encodeConfig(c: GitHubConfig): String = JSONObject()
-    .put("owner", c.owner).put("repo", c.repo).put("author", c.author).toString()
+private fun githubConfigJson(c: GitHubConfig, recurrence: Recurrence): String =
+    JSONObject()
+        .put("owner", c.owner).put("repo", c.repo).put("author", c.author)
+        .put("recurrence", RecurrenceSchedule.encode(recurrence))
+        .toString()
 
-private fun encodeState(s: GitHubState): String {
-    val o = JSONObject().put("createdDate", s.createdDate)
-    s.lastSuccessDate?.let { o.put("lastSuccessDate", it) }
-    s.lastSettledDate?.let { o.put("lastSettledDate", it) }
-    return o.put("currentStreak", s.currentStreak).put("bestStreak", s.bestStreak).toString()
-}
-
-/** GoalEntity → the DTO the existing UI renders (keeps consumers unchanged). */
+/** GoalEntity → the DTO the existing GitHub card renders. */
 fun GoalEntity.toGitHubGoalEntity(): GitHubGoalEntity {
     val c = gitHubConfig()
-    val s = gitHubState()
+    val today = LocalDate.now().toString()
     return GitHubGoalEntity(
         id = id, owner = c.owner, repo = c.repo, author = c.author,
-        createdDate = s.createdDate, lastSuccessDate = s.lastSuccessDate,
-        lastSettledDate = s.lastSettledDate, currentStreak = s.currentStreak,
-        bestStreak = s.bestStreak, rewardPoints = rewardPoints,
-        penaltyShorts = penaltyShorts, active = active
+        createdDate = today,
+        lastSuccessDate = if (metThisPeriod()) today else null,
+        lastSettledDate = null,
+        currentStreak = currentStreak(),
+        bestStreak = bestStreak(),
+        rewardPoints = rewardPoints,
+        penaltyShorts = penaltyShorts,
+        active = active
     )
 }
 
-/** Build a fresh GITHUB_COMMIT goal row. */
-fun newGitHubGoal(owner: String, repo: String, author: String, reward: Int, penalty: Int, now: Long): GoalEntity =
-    GoalEntity(
-        type = GoalType.GITHUB_COMMIT.name,
-        title = "${owner.trim()}/${repo.trim()}",
-        direction = GoalDirection.ACHIEVE.name,
-        schedule = GoalSchedule.DAILY.name,
-        target = 1,
-        unit = "commit",
-        progress = 0,
-        rewardPoints = reward,
-        penaltyShorts = penalty,
-        configJson = encodeConfig(GitHubConfig(owner.trim(), repo.trim(), author.trim())),
-        stateJson = encodeState(GitHubState(createdDate = LocalDate.now().toString())),
-        active = true,
-        createdAt = now,
-        deadlineAt = null
-    )
+/** Build a fresh recurring GITHUB_COMMIT goal (default Daily; user can pick Weekly/Custom). */
+fun newGitHubGoal(
+    owner: String,
+    repo: String,
+    author: String,
+    reward: Int,
+    penalty: Int,
+    now: Long,
+    recurrence: Recurrence = Recurrence.Daily
+): GoalEntity = GoalEntity(
+    type = GoalType.GITHUB_COMMIT.name,
+    title = "${owner.trim()}/${repo.trim()}",
+    direction = GoalDirection.ACHIEVE.name,
+    schedule = GoalSchedule.ONGOING.name,
+    target = 1,
+    unit = "commit",
+    progress = 0,
+    rewardPoints = reward,
+    penaltyShorts = penalty,
+    configJson = githubConfigJson(GitHubConfig(owner.trim(), repo.trim(), author.trim()), recurrence),
+    stateJson = initialRecurringState(recurrence),
+    active = true,
+    createdAt = now,
+    deadlineAt = null
+)
 
-/** Copy a legacy github_goals row into the unified goals table, preserving streak/dates. */
+/** Legacy github_goals row → a recurring (Daily) goal, preserving streak. */
 fun GitHubGoalEntity.toGoalEntity(now: Long): GoalEntity =
-    GoalEntity(
-        type = GoalType.GITHUB_COMMIT.name,
-        title = "$owner/$repo",
-        direction = GoalDirection.ACHIEVE.name,
-        schedule = GoalSchedule.DAILY.name,
-        target = 1,
-        unit = "commit",
-        progress = 0,
-        rewardPoints = rewardPoints,
-        penaltyShorts = penaltyShorts,
-        configJson = encodeConfig(GitHubConfig(owner, repo, author)),
-        stateJson = encodeState(
-            GitHubState(createdDate, lastSuccessDate, lastSettledDate, currentStreak, bestStreak)
-        ),
-        active = active,
-        createdAt = now,
-        deadlineAt = null
-    )
+    newGitHubGoal(owner, repo, author, rewardPoints, penaltyShorts, now, Recurrence.Daily)
+        .copy(active = active)
+        .withRecurringState(
+            streak = currentStreak,
+            best = bestStreak,
+            met = lastSuccessDate == LocalDate.now().toString()
+        )
+
+/** Reshape an old-shape GITHUB_COMMIT row (already in the goals table) into the
+ *  recurring model, preserving id/active/streak. Used by the one-time migration. */
+fun GoalEntity.reshapeGitHubToRecurring(): GoalEntity {
+    val c = gitHubConfig()
+    val s = legacyGitHubState()
+    return newGitHubGoal(c.owner, c.repo, c.author, rewardPoints, penaltyShorts, createdAt, Recurrence.Daily)
+        .copy(id = id, active = active)
+        .withRecurringState(
+            streak = s.currentStreak,
+            best = s.bestStreak,
+            met = s.lastSuccessDate == LocalDate.now().toString()
+        )
+}
 
 // ---------------------------------------------------------------------------
-// The verifier: same fairness rules as the old GitHubGoalManager, now operating
-// on a GoalEntity. A MISS is only recorded when the API DEFINITIVELY answers
-// "no commits"; any network/API error propagates so the caller aborts + retries
-// (we never punish for our own failure to check).
+// The verifier is now PURE: it only answers "was there a commit in the CURRENT
+// period?". Streaks, rewards and penalties are owned by the shared recurring
+// engine (GoalOrchestrator.applyResult + GoalEngine.settleRecurring). A network
+// error propagates so the poll aborts and retries — we never punish for our own
+// failure to check.
 // ---------------------------------------------------------------------------
 
 @Singleton
 class GitHubVerifier @Inject constructor(
-    private val goalDao: GoalDao,
     private val api: GitHubApi,
-    private val rewards: RewardsManager,
     private val settings: SettingsRepository,
     private val notifier: Notifier
 ) : GoalVerifier {
@@ -146,92 +154,34 @@ class GitHubVerifier @Inject constructor(
     override val cadence = VerificationCadence.Polled(POLL_INTERVAL_MIN)
 
     override suspend fun verify(goal: GoalEntity): VerificationResult {
-        val token = settings.githubToken.first().ifBlank { null }
-        val config = goal.gitHubConfig()
+        if (goal.metThisPeriod()) return VerificationResult.NoChange   // already counted this period
+        // Period already ended → wait for settleRecurring to roll it, so a NEW-period
+        // commit is never mis-credited to the old period.
+        val ended = goal.periodEndAt()
+        if (ended in 1..System.currentTimeMillis()) return VerificationResult.NoChange
         val zone = ZoneId.systemDefault()
-        val today = LocalDate.now(zone)
-        var state = goal.gitHubState()
-        var g = goal
-        var credited = false
-        var missed = false
-
-        // 1. Punish FIRST: finalize each fully-elapsed day that wasn't a success.
-        // Settling before crediting today matters — a miss on an OLDER day must not
-        // zero the streak that today's commit is about to (re)start.
-        val created = LocalDate.parse(state.createdDate)
-        var day = state.lastSettledDate?.let { LocalDate.parse(it).plusDays(1) } ?: created
-        if (day.isBefore(created)) day = created
-
-        var guard = 0
-        while (day.isBefore(today) && guard < MAX_BACKFILL_DAYS) {
-            val success = state.lastSuccessDate == day.toString() || api.hasCommit(
-                config.owner, config.repo, config.author.ifBlank { null },
-                since = day.atStartOfDay(zone).toInstant(),
-                until = day.plusDays(1).atStartOfDay(zone).toInstant(),
-                token = token
-            )
-            state = if (!success) {
-                rewards.applyPenaltyShorts(goal.penaltyShorts)
-                missed = true
-                Timber.tag("GitHub").i("%s/%s MISSED %s (-%d shorts)", config.owner, config.repo, day, goal.penaltyShorts)
-                state.copy(currentStreak = 0, lastSettledDate = day.toString())
-            } else {
-                state.copy(lastSettledDate = day.toString())
-            }
-            g = g.copy(stateJson = encodeState(state))
-            goalDao.upsert(g)
-            day = day.plusDays(1)
-            guard++
-        }
-
-        // 2. Reward: has a commit landed today (and not yet credited)?
-        if (state.lastSuccessDate != today.toString()) {
-            val committed = api.hasCommit(
-                config.owner, config.repo, config.author.ifBlank { null },
-                since = today.atStartOfDay(zone).toInstant(),
-                until = Instant.now(),
-                token = token
-            )
-            if (committed) {
-                val continues = state.lastSuccessDate == today.minusDays(1).toString()
-                val streak = if (continues) state.currentStreak + 1 else 1
-                state = state.copy(
-                    lastSuccessDate = today.toString(),
-                    currentStreak = streak,
-                    bestStreak = maxOf(state.bestStreak, streak)
-                )
-                g = g.copy(stateJson = encodeState(state))
-                goalDao.upsert(g)
-                rewards.award(goal.rewardPoints, "github_commit:${goal.id}:$today")
-                credited = true
-                Timber.tag("GitHub").i("%s/%s committed %s (streak %d)", config.owner, config.repo, today, streak)
-                notifier.post(
-                    channel = NotifChannel.GOALS,
-                    id = Notifier.Ids.commit(goal.id),
-                    title = "Commit logged ✅",
-                    body = "${config.owner}/${config.repo} — $streak-day streak. Keep it going."
-                )
-            }
-        }
-
-        // 3. Invariant: a commit today is always at least a 1-day streak. Also heals
-        // any goal left at streak 0 by the old reward-then-settle ordering.
-        if (state.lastSuccessDate == today.toString() && state.currentStreak < 1) {
-            state = state.copy(currentStreak = 1, bestStreak = maxOf(state.bestStreak, 1))
-            g = g.copy(stateJson = encodeState(state))
-            goalDao.upsert(g)
-        }
-
-        return when {
-            credited -> VerificationResult.Passed
-            missed -> VerificationResult.Failed
-            else -> VerificationResult.NoChange
-        }
+        val period = RecurrenceSchedule.periodOn(goal.recurrence(), LocalDate.now(zone), zone)
+            ?: return VerificationResult.NoChange                      // Custom off-day: nothing due
+        val config = goal.gitHubConfig()
+        val token = settings.githubToken.first().ifBlank { null }
+        val committed = api.hasCommit(
+            config.owner, config.repo, config.author.ifBlank { null },
+            since = Instant.ofEpochMilli(period.startAt),
+            until = Instant.now(),
+            token = token
+        )
+        if (!committed) return VerificationResult.NoChange
+        notifier.post(
+            channel = NotifChannel.GOALS,
+            id = Notifier.Ids.commit(goal.id),
+            title = "Commit logged ✅",
+            body = "${config.owner}/${config.repo} — counted for this period."
+        )
+        return VerificationResult.Progress(1)
     }
 
     companion object {
-        const val POLL_INTERVAL_MIN = 180L        // matches the WorkManager 3-hour cadence
-        private const val MAX_BACKFILL_DAYS = 14   // cap catch-up work per run
+        const val POLL_INTERVAL_MIN = 180L   // matches the maintenance worker's 3-hour cadence
     }
 }
 

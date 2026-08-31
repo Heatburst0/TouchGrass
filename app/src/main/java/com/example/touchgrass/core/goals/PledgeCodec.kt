@@ -63,6 +63,33 @@ fun GoalEntity.withRecurringState(
         .toString()
 )
 
+/**
+ * Apply [units] of progress to a recurring goal's CURRENT period. Returns the
+ * updated entity and whether the target was JUST met (so the caller rewards once).
+ * Idempotent once the period is met. Shared by reading (push) and GitHub (poll).
+ */
+fun GoalEntity.addRecurringProgress(units: Int): Pair<GoalEntity, Boolean> {
+    if (metThisPeriod()) return this to false
+    val next = progress + units
+    return if (next >= target) copy(progress = target).withRecurringState(met = true) to true
+    else copy(progress = next) to false
+}
+
+/** Fresh recurring state JSON (streak 0, first period, not yet met). */
+fun initialRecurringState(
+    recurrence: Recurrence,
+    zone: java.time.ZoneId = java.time.ZoneId.systemDefault()
+): String {
+    val first = RecurrenceSchedule.periodAtOrAfter(recurrence, java.time.LocalDate.now(zone), zone)
+    return JSONObject()
+        .put("status", CommitmentStatus.ACTIVE.name)
+        .put("currentStreak", 0)
+        .put("bestStreak", 0)
+        .put("periodEndAt", first?.endAt ?: 0L)
+        .put("metThisPeriod", false)
+        .toString()
+}
+
 
 fun newPledgeGoal(
     pillar: PillarType,

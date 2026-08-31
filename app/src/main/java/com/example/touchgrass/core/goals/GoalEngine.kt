@@ -99,12 +99,9 @@ class GoalEngine @Inject constructor(
                 .filter { it.pledgeCategory() == pillar.name }
                 .forEach { g ->
                     if (g.recurrence() != Recurrence.Once) {
-                        if (g.metThisPeriod()) return@forEach
-                        val np = g.progress + units
-                        if (np >= g.target) {
-                            goalDao.upsert(g.copy(progress = g.target).withRecurringState(met = true))
-                            rewards.award(g.rewardPoints, "goal_met:${g.id}:period")
-                        } else goalDao.upsert(g.copy(progress = np))
+                        val (updated, metNow) = g.addRecurringProgress(units)
+                        goalDao.upsert(updated)
+                        if (metNow) rewards.award(g.rewardPoints, "goal_met:${g.id}:period")
                     } else {
                         if ((g.deadlineAt ?: Long.MAX_VALUE) < now) return@forEach
                         val np = g.progress + units
@@ -133,7 +130,8 @@ class GoalEngine @Inject constructor(
     suspend fun settleRecurring() {
         val now = System.currentTimeMillis()
         val zone = java.time.ZoneId.systemDefault()
-        goalDao.activeOfType(GoalType.TASK.name)
+        // Every recurring goal, of any type (reading Tasks AND GitHub commits).
+        goalDao.observeActive().first()
             .filter { it.recurrence() != Recurrence.Once }
             .forEach { g0 ->
                 var g = g0

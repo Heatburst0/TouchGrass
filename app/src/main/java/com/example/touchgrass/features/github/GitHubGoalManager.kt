@@ -4,7 +4,12 @@ import com.example.touchgrass.core.data.SettingsRepository
 import com.example.touchgrass.core.data.db.GitHubGoalDao
 import com.example.touchgrass.core.data.db.GitHubGoalEntity
 import com.example.touchgrass.core.data.db.GoalDao
+import com.example.touchgrass.core.goals.GoalOrchestrator
 import com.example.touchgrass.core.goals.GoalType
+import com.example.touchgrass.core.goals.Recurrence
+import com.example.touchgrass.core.goals.RecurrenceSchedule
+import com.example.touchgrass.core.goals.metThisPeriod
+import com.example.touchgrass.core.goals.recurrence
 import com.example.touchgrass.di.ApplicationScope
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.Flow
@@ -15,6 +20,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import org.json.JSONObject
 import timber.log.Timber
 import java.io.IOException
 import java.time.Instant
@@ -24,52 +30,45 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * Recurring GitHub daily-commit goals. As of the Goal+Verifier refactor (Phase 1)
- * this is a thin facade over the unified `goals` table: storage and verification
- * live in [GitHubVerifier], while this class keeps the exact public surface the
- * rest of the app already depends on (UI list, entertainment lock, add/remove,
- * background check) so no consumer had to change.
- *
- * Fairness rule (unchanged): a MISS is only recorded when the API definitively
- * answers "no commits that day"; any network/API error aborts that goal's run
- * and is retried later.
+ * GitHub commit goals. As of Option B a GitHub goal is a RECURRING goal on the
+ * shared engine (Daily by default, editable to Weekly/Custom) — the verifier just
+ * reports "committed this period?" and [GoalOrchestrator] + GoalEngine.settleRecurring
+ * own streaks/rewards/penalties. This class stays a thin facade over the goals
+ * table so the UI, entertainment lock, and worker didn't change shape.
  */
 @Singleton
 class GitHubGoalManager @Inject constructor(
     private val goalDao: GoalDao,
-    private val legacyDao: GitHubGoalDao,      // one-time migration of pre-refactor rows
-    private val verifier: GitHubVerifier,
+    private val legacyDao: GitHubGoalDao,      // one-time migration of pre-goals-table rows
+    private val orchestrator: GoalOrchestrator,
     private val api: GitHubApi,
     private val settings: SettingsRepository,
     @ApplicationScope private val scope: CoroutineScope
 ) {
 
-    /** GITHUB_COMMIT goals, mapped to the DTO the existing UI renders. */
+    /** GITHUB_COMMIT goals, mapped to the DTO the existing card renders. */
     val goals: Flow<List<GitHubGoalEntity>> = goalDao.observeAll().map { all ->
         all.filter { it.type == GoalType.GITHUB_COMMIT.name }
             .map { it.toGitHubGoalEntity() }
     }
 
     /**
-     * True when the goal-lock is on AND at least one active repo hasn't been
-     * committed to today — i.e., entertainment should be blocked. Read
-     * synchronously via `.value` from the accessibility service.
+     * True when the goal-lock is on AND at least one active goal owes work now.
+     * A GitHub goal owes when TODAY is one of its active periods and it hasn't
+     * been committed to yet this period (so a Mon–Fri goal doesn't lock weekends).
      */
     val entertainmentLocked: StateFlow<Boolean> =
-        combine(
-            settings.goalLockEnabled,
-            goalDao.observeAll()
-        ) { enabled, allGoals ->
+        combine(settings.goalLockEnabled, goalDao.observeAll()) { enabled, allGoals ->
             if (!enabled) return@combine false
-            val today = LocalDate.now().toString()
-            val gitHubOwed = allGoals.any {
-                it.active && it.type == GoalType.GITHUB_COMMIT.name &&
-                    it.gitHubState().lastSuccessDate != today
+            val zone = ZoneId.systemDefault()
+            val today = LocalDate.now(zone)
+            val gitHubOwed = allGoals.any { g ->
+                g.active && g.type == GoalType.GITHUB_COMMIT.name && !g.metThisPeriod() &&
+                    RecurrenceSchedule.periodOn(g.recurrence(), today, zone) != null
             }
-            // Only pledges DUE today (or overdue-but-unsettled) lock — a goal due
-            // in 3 days shouldn't block entertainment until its deadline is near.
-            val startOfTomorrow = LocalDate.now().plusDays(1)
-                .atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
+            // Pledges due today (or overdue-but-unsettled) also lock.
+            val startOfTomorrow = today.plusDays(1)
+                .atStartOfDay(zone).toInstant().toEpochMilli()
             val pledgeOwed = allGoals.any {
                 it.active && it.type == GoalType.TASK.name &&
                     (it.deadlineAt ?: Long.MAX_VALUE) < startOfTomorrow
@@ -78,19 +77,25 @@ class GitHubGoalManager @Inject constructor(
         }.stateIn(scope, SharingStarted.Eagerly, false)
 
     init {
-        // Move any pre-refactor github_goals rows into the unified table, once.
-        scope.launch { migrateLegacyGoals() }
+        scope.launch {
+            migrateLegacyGoals()
+            migrateGitHubToRecurring()
+        }
     }
 
     /**
-     * Validates the repo is reachable BEFORE saving. Returns null on success,
-     * or a user-facing error message (e.g. a private repo that needs a token).
+     * Validates the repo is reachable BEFORE saving. Returns null on success, or a
+     * user-facing error (e.g. a private repo that needs a token). [recurrence]
+     * defaults to Daily but can be Weekly or Custom weekdays.
      */
-    suspend fun addGoal(owner: String, repo: String, author: String): String? {
+    suspend fun addGoal(
+        owner: String,
+        repo: String,
+        author: String,
+        recurrence: Recurrence = Recurrence.Daily
+    ): String? {
         val token = settings.githubToken.first().ifBlank { null }
         return try {
-            // Throwaway reachability probe: if GitHub answers at all, the repo
-            // exists and we can read it. 404/401/403 arrive as GitHubException.
             api.hasCommit(
                 owner, repo, author.ifBlank { null },
                 since = Instant.now().minusSeconds(86_400),
@@ -98,7 +103,11 @@ class GitHubGoalManager @Inject constructor(
                 token = token
             )
             goalDao.upsert(
-                newGitHubGoal(owner, repo, author, DAILY_REWARD_POINTS, DAILY_PENALTY_SHORTS, System.currentTimeMillis())
+                newGitHubGoal(
+                    owner, repo, author,
+                    DAILY_REWARD_POINTS, DAILY_PENALTY_SHORTS,
+                    System.currentTimeMillis(), recurrence
+                )
             )
             null
         } catch (e: GitHubException) {
@@ -110,17 +119,9 @@ class GitHubGoalManager @Inject constructor(
 
     suspend fun removeGoal(id: Long) = goalDao.delete(id)
 
-    /** Poll + settle every active goal via the verifier. Safe to call often. */
-    suspend fun runChecks() {
-        goalDao.activeOfType(GoalType.GITHUB_COMMIT.name).forEach { goal ->
-            try {
-                verifier.verify(goal)
-            } catch (e: Exception) {
-                // Network/API/rate-limit failure — leave state untouched, retry next run.
-                Timber.tag("GitHub").w(e, "Check failed for goal %d", goal.id)
-            }
-        }
-    }
+    /** Poll GitHub goals through the shared spine — sets metThisPeriod when a commit
+     *  lands this period. Streaks/rewards/penalties are settled by the engine. */
+    suspend fun runChecks() = orchestrator.runPolled()
 
     private suspend fun migrateLegacyGoals() {
         if (settings.githubGoalsMigrated.first()) return
@@ -133,8 +134,22 @@ class GitHubGoalManager @Inject constructor(
         }
     }
 
+    /** Option B: reshape pre-recurring GITHUB_COMMIT rows into the recurring model. */
+    private suspend fun migrateGitHubToRecurring() {
+        if (settings.githubRecurringMigrated.first()) return
+        val toReshape = goalDao.observeAll().first().filter {
+            it.type == GoalType.GITHUB_COMMIT.name &&
+                JSONObject(it.configJson).optJSONObject("recurrence") == null
+        }
+        toReshape.forEach { goalDao.upsert(it.reshapeGitHubToRecurring()) }
+        settings.setGithubRecurringMigrated(true)
+        if (toReshape.isNotEmpty()) {
+            Timber.tag("GitHub").i("Reshaped %d GitHub goal(s) to the recurring model", toReshape.size)
+        }
+    }
+
     companion object {
-        const val DAILY_REWARD_POINTS = 30   // ~3 pages' worth for a daily commit
-        const val DAILY_PENALTY_SHORTS = 5   // docked from today's allowance on a miss
+        const val DAILY_REWARD_POINTS = 30   // ~3 pages' worth for a commit period
+        const val DAILY_PENALTY_SHORTS = 5   // docked from the allowance on a missed period
     }
 }

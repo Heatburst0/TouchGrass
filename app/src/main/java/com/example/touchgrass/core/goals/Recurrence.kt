@@ -15,8 +15,9 @@ sealed interface Recurrence {
     data class Custom(val days: Set<DayOfWeek>) : Recurrence
 }
 
-/** One active period: a stable key + the instant it ends (exclusive, epoch millis). */
-data class Period(val key: String, val endAt: Long)
+/** One active period: a stable key + the instants it starts (inclusive) and ends
+ *  (exclusive), epoch millis. */
+data class Period(val key: String, val startAt: Long, val endAt: Long)
 
 object RecurrenceSchedule {
 
@@ -48,15 +49,16 @@ object RecurrenceSchedule {
      *  off-day, or Once which has no periods). */
     fun periodOn(r: Recurrence, date: LocalDate, zone: ZoneId): Period? = when (r) {
         Recurrence.Once -> null
-        Recurrence.Daily -> Period(date.toString(), startOfDay(date.plusDays(1), zone))
+        Recurrence.Daily -> Period(date.toString(), startOfDay(date, zone), startOfDay(date.plusDays(1), zone))
         Recurrence.Weekly -> {
             val monday = date.with(DayOfWeek.MONDAY)
             val y = monday.get(IsoFields.WEEK_BASED_YEAR)
             val w = monday.get(IsoFields.WEEK_OF_WEEK_BASED_YEAR)
-            Period("%d-W%02d".format(y, w), startOfDay(monday.plusDays(7), zone))
+            Period("%d-W%02d".format(y, w), startOfDay(monday, zone), startOfDay(monday.plusDays(7), zone))
         }
         is Recurrence.Custom ->
-            if (date.dayOfWeek in r.days) Period(date.toString(), startOfDay(date.plusDays(1), zone))
+            if (date.dayOfWeek in r.days)
+                Period(date.toString(), startOfDay(date, zone), startOfDay(date.plusDays(1), zone))
             else null
     }
 
