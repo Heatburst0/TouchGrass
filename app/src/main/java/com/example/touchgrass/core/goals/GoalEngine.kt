@@ -135,15 +135,19 @@ class GoalEngine @Inject constructor(
             .filter { it.recurrence() != Recurrence.Once }
             .forEach { g0 ->
                 var g = g0
+                // A met current period is always at least a 1-streak (streak is now
+                // counted when a period is MET). Heals goals left at 0 by the old order.
+                if (g.metThisPeriod() && g.currentStreak() < 1) {
+                    g = g.withRecurringState(streak = 1, best = maxOf(g.bestStreak(), 1))
+                    goalDao.upsert(g)
+                }
                 var guard = 0
                 while (g.periodEndAt() in 1..now && guard < 370) {
-                    g = if (g.metThisPeriod()) {
-                        val s = g.currentStreak() + 1
-                        g.withRecurringState(streak = s, best = maxOf(g.bestStreak(), s))
-                    } else {
+                    if (!g.metThisPeriod()) {
                         rewards.applyPenaltyShorts(g.penaltyShorts)
-                        g.withRecurringState(streak = 0)
+                        g = g.withRecurringState(streak = 0)
                     }
+                    // A met period keeps its streak (already counted at meet-time); just roll.
                     val endDate = java.time.Instant.ofEpochMilli(g.periodEndAt())
                         .atZone(zone).toLocalDate()
                     val next = RecurrenceSchedule.periodAtOrAfter(g.recurrence(), endDate, zone) ?: break

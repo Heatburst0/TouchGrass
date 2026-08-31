@@ -71,8 +71,15 @@ fun GoalEntity.withRecurringState(
 fun GoalEntity.addRecurringProgress(units: Int): Pair<GoalEntity, Boolean> {
     if (metThisPeriod()) return this to false
     val next = progress + units
-    return if (next >= target) copy(progress = target).withRecurringState(met = true) to true
-    else copy(progress = next) to false
+    return if (next >= target) {
+        // Meeting a period IS the streak — count it now, not at settlement, so a
+        // goal done today reads 1 immediately. settleRecurring must not re-count.
+        val streak = currentStreak() + 1
+        copy(progress = target)
+            .withRecurringState(streak = streak, best = maxOf(bestStreak(), streak), met = true) to true
+    } else {
+        copy(progress = next) to false
+    }
 }
 
 /** Fresh recurring state JSON (streak 0, first period, not yet met). */
