@@ -6,6 +6,8 @@ import android.view.accessibility.AccessibilityEvent
 import android.widget.Toast
 import com.example.touchgrass.core.analyzer.NodeTreeAnalyzer
 import com.example.touchgrass.core.manager.ShortsTrackerManager
+import com.example.touchgrass.core.notifications.Notifier
+import com.example.touchgrass.core.notifications.ServiceReminderWorker
 import com.example.touchgrass.core.screentime.ScreenTimeNudger
 import com.example.touchgrass.features.github.GitHubGoalManager
 import com.example.touchgrass.presentation.blockerView.BlockerActivity
@@ -37,6 +39,10 @@ class InspectorService : AccessibilityService() {
 
     @Inject
     lateinit var gitHubGoalManager: GitHubGoalManager
+
+    @Inject
+    lateinit var notifier: Notifier
+
     private var lastAnalysisTime = 0L
     private var lastGoalLockAt = 0L
 
@@ -48,6 +54,10 @@ class InspectorService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         Timber.tag("ShortsTracker").i("Service Connected & Ready")
+
+        // Tracking is back on — end the "tracking off" reminder loop.
+        ServiceReminderWorker.stop(this)
+        notifier.cancel(Notifier.Ids.ACCESSIBILITY_OFF)
 
         serviceScope.launch {
             trackerManager.triggerBlockEvent.collect {
@@ -146,9 +156,19 @@ class InspectorService : AccessibilityService() {
         Timber.w("Inspector Service Interrupted")
     }
 
+    override fun onUnbind(intent: Intent?): Boolean {
+        // Service switched off (or unbound) — start the recurring reminder as soon
+        // as it goes off, independent of opening the app.
+        ServiceReminderWorker.start(this)
+        return super.onUnbind(intent)
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         serviceScope.cancel()
+        // Backstop in case onUnbind didn't fire. If the system rebinds, onServiceConnected
+        // cancels this again (self-correcting), so a transient restart won't spam.
+        ServiceReminderWorker.start(this)
         Timber.tag("ShortsTracker").i("Service Destroyed")
     }
 }

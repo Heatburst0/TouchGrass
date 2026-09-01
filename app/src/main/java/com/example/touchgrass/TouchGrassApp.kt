@@ -10,7 +10,6 @@ import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.NetworkType
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
-import com.example.touchgrass.core.notifications.ServiceReminderWorker
 import com.example.touchgrass.core.screentime.ScreenTimeNudger
 import com.example.touchgrass.work.GoalMaintenanceWorker
 import dagger.hilt.android.HiltAndroidApp
@@ -51,7 +50,6 @@ class TouchGrassApp : Application(), Configuration.Provider {
         // Retire the old GitHub-only periodic worker (its class no longer exists).
         WorkManager.getInstance(this).cancelUniqueWork("github_daily_check")
         scheduleGoalMaintenance()
-        scheduleServiceReminder()
     }
 
     /** Background maintenance (~every 3h): GitHub poll + one-shot & recurring goal
@@ -72,13 +70,4 @@ class TouchGrassApp : Application(), Configuration.Provider {
         )
     }
 
-    /** Routinely remind the user if the accessibility service got switched off. */
-    private fun scheduleServiceReminder() {
-        val request = PeriodicWorkRequestBuilder<ServiceReminderWorker>(6, TimeUnit.HOURS).build()
-        WorkManager.getInstance(this).enqueueUniquePeriodicWork(
-            ServiceReminderWorker.UNIQUE_NAME,
-            ExistingPeriodicWorkPolicy.KEEP,
-            request
-        )
-    }
 }
