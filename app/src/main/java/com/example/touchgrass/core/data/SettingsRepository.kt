@@ -50,6 +50,7 @@ class SettingsRepository @Inject constructor(
         val GITHUB_RECURRING_MIGRATED = booleanPreferencesKey("github_recurring_migrated")
         val ACTIVE_FOCUS = stringPreferencesKey("active_focus")
         val FOCUS_BLOCKED_PACKAGES = stringPreferencesKey("focus_blocked_packages")
+        val DEVICE_ID = stringPreferencesKey("device_id")
     }
 
     val shortsLimit: Flow<Int> = context.dataStore.data
@@ -180,6 +181,17 @@ class SettingsRepository @Inject constructor(
 
     suspend fun setFocusBlockedPackages(packages: Set<String>) {
         context.dataStore.edit { it[Keys.FOCUS_BLOCKED_PACKAGES] = packages.joinToString(",") }
+    }
+
+    // ---- Stable per-install device id (for cross-device sync) ----
+
+    /** Returns the persisted device id, creating one on first read. */
+    suspend fun getOrCreateDeviceId(): String {
+        val existing = context.dataStore.data.first()[Keys.DEVICE_ID]
+        if (!existing.isNullOrBlank()) return existing
+        val fresh = java.util.UUID.randomUUID().toString()
+        context.dataStore.edit { it[Keys.DEVICE_ID] = fresh }
+        return fresh
     }
 
     val githubRecurringMigrated: Flow<Boolean> = context.dataStore.data
