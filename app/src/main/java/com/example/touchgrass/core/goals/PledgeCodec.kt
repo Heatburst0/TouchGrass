@@ -144,25 +144,6 @@ fun newPledgeGoal(
     )
 }
 
-/** One-time migration of a legacy commitments row into a goal. Reading pledges
- *  become first-class READING goals; anything else stays a generic TASK. */
-fun CommitmentEntity.toPledgeGoal(now: Long): GoalEntity = GoalEntity(
-    type = if (pillar.equals("READING", ignoreCase = true)) GoalType.READING.name else GoalType.TASK.name,
-    title = title,
-    direction = GoalDirection.ACHIEVE.name,
-    schedule = GoalSchedule.ONE_SHOT.name,
-    target = targetAmount,
-    unit = unitLabel,
-    progress = progress,
-    rewardPoints = rewardPoints,
-    penaltyShorts = penaltyShorts,
-    configJson = JSONObject().put("category", pillar).toString(),
-    stateJson = JSONObject().put("status", status).toString(),
-    active = status == CommitmentStatus.ACTIVE.name,
-    createdAt = createdAt,
-    deadlineAt = deadlineAt
-)
-
 /**
  * Richer read model for the Goals UI — carries recurrence + streak, which the
  * legacy [CommitmentEntity] DTO can't (it's still a Room entity for the old

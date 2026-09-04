@@ -63,45 +63,6 @@ interface PageReadDao {
     fun pagesReadSince(since: Long): Flow<Int>
 }
 
-@Dao
-interface CommitmentDao {
-    @Insert
-    suspend fun insert(commitment: CommitmentEntity): Long
-
-    @Update
-    suspend fun update(commitment: CommitmentEntity)
-
-    @Query("SELECT * FROM commitments WHERE status = 'ACTIVE' ORDER BY deadlineAt ASC")
-    fun observeActive(): Flow<List<CommitmentEntity>>
-
-    @Query("SELECT * FROM commitments WHERE status IN ('MET','MISSED') ORDER BY deadlineAt DESC LIMIT 30")
-    fun observePast(): Flow<List<CommitmentEntity>>
-
-    @Query("SELECT * FROM commitments WHERE pillar = :pillar AND status = 'ACTIVE' AND deadlineAt >= :now")
-    suspend fun activeForPillar(pillar: String, now: Long): List<CommitmentEntity>
-
-    @Query("SELECT * FROM commitments WHERE status = 'ACTIVE' AND deadlineAt < :now")
-    suspend fun overdue(now: Long): List<CommitmentEntity>
-}
-
-@Dao
-interface GitHubGoalDao {
-    @Insert
-    suspend fun insert(goal: GitHubGoalEntity): Long
-
-    @Update
-    suspend fun update(goal: GitHubGoalEntity)
-
-    @Query("DELETE FROM github_goals WHERE id = :id")
-    suspend fun delete(id: Long)
-
-    @Query("SELECT * FROM github_goals ORDER BY id DESC")
-    fun observeAll(): Flow<List<GitHubGoalEntity>>
-
-    @Query("SELECT * FROM github_goals WHERE active = 1")
-    suspend fun activeGoals(): List<GitHubGoalEntity>
-}
-
 /** Aggregate stats for the Focus screen header. */
 data class FocusStats(
     val completed: Int,

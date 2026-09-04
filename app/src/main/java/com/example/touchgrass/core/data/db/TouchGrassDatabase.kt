@@ -10,20 +10,16 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         BookEntity::class,
         PageReadEntity::class,
         PointsEntryEntity::class,
-        CommitmentEntity::class,
-        GitHubGoalEntity::class,
         GoalEntity::class,
         FocusSessionEntity::class
     ],
-    version = 8,
+    version = 9,
     exportSchema = false
 )
 abstract class TouchGrassDatabase : RoomDatabase() {
     abstract fun bookDao(): BookDao
     abstract fun pageReadDao(): PageReadDao
     abstract fun pointsDao(): PointsDao
-    abstract fun commitmentDao(): CommitmentDao
-    abstract fun gitHubGoalDao(): GitHubGoalDao
     abstract fun goalDao(): GoalDao
     abstract fun focusSessionDao(): FocusSessionDao
 
@@ -124,6 +120,16 @@ abstract class TouchGrassDatabase : RoomDatabase() {
             }
         }
 
+
+        /** v9: trim the legacy tables. Pledges and GitHub goals now live entirely
+         *  in `goals`; their old standalone tables (and the one-time copy-in
+         *  migrations that fed them) are gone. */
+        val MIGRATION_8_9 = object : Migration(8, 9) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("DROP TABLE IF EXISTS `commitments`")
+                db.execSQL("DROP TABLE IF EXISTS `github_goals`")
+            }
+        }
 
         /** v8: focus session history — the "N successful sessions" record. */
         val MIGRATION_7_8 = object : Migration(7, 8) {

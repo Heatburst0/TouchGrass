@@ -44,13 +44,12 @@ data class PointsEntryEntity(
 )
 
 /**
- * A verified pledge: do [targetAmount] [unitLabel] of [pillar] by [deadlineAt].
- * Meet it → [rewardPoints] bonus; miss it → [penaltyShorts] docked from today's
- * entertainment allowance. `pillar` and `status` are stored as enum names.
+ * View DTO for a pledge row (a GoalType.TASK/READING goal), mapped from GoalEntity
+ * by [toCommitment]. No longer a Room table — the old `commitments` table was
+ * dropped once pledges moved onto the unified goals table.
  */
-@Entity(tableName = "commitments")
 data class CommitmentEntity(
-    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val id: Long = 0,
     val pillar: String,
     val title: String,
     val targetAmount: Int,
@@ -64,13 +63,12 @@ data class CommitmentEntity(
 )
 
 /**
- * A recurring "commit daily to this repo" goal, verified against the GitHub
- * API in the background. Dates are local `yyyy-MM-dd` strings. `author` blank
- * = any commit to the repo counts (good for a solo repo).
+ * View DTO for a GITHUB_COMMIT goal, mapped from GoalEntity by [toGitHubGoalEntity]
+ * for the GitHub card. No longer a Room table — the old `github_goals` table was
+ * dropped once GitHub goals moved onto the unified goals table.
  */
-@Entity(tableName = "github_goals")
 data class GitHubGoalEntity(
-    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val id: Long = 0,
     val owner: String,
     val repo: String,
     val author: String,

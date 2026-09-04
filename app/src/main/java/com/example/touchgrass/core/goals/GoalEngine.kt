@@ -1,7 +1,5 @@
 package com.example.touchgrass.core.goals
 
-import com.example.touchgrass.core.data.SettingsRepository
-import com.example.touchgrass.core.data.db.CommitmentDao
 import com.example.touchgrass.core.data.db.CommitmentEntity
 import com.example.touchgrass.core.data.db.GoalDao
 import com.example.touchgrass.core.rewards.RewardsManager
@@ -29,9 +27,7 @@ import javax.inject.Singleton
 @Singleton
 class GoalEngine @Inject constructor(
     private val goalDao: GoalDao,
-    private val legacyDao: CommitmentDao,      // one-time migration of pre-refactor rows
     private val rewards: RewardsManager,
-    private val settings: SettingsRepository,
     @ApplicationScope private val scope: CoroutineScope
 ) {
     /** Goal types the Goals screen renders as "pledges": manual TASK goals and
@@ -70,7 +66,7 @@ class GoalEngine @Inject constructor(
                 .map { it.toGoalView() }
         }.stateIn(scope, SharingStarted.Eagerly, emptyList())
 
-    init { scope.launch { migrateLegacyPledges(); settleOverdue(); settleRecurring() } }
+    init { scope.launch { settleOverdue(); settleRecurring() } }
 
 
     fun createCommitment(
@@ -165,14 +161,4 @@ class GoalEngine @Inject constructor(
     }
 
 
-    private suspend fun migrateLegacyPledges() {
-        if (settings.pledgesMigrated.first()) return
-        val now = System.currentTimeMillis()
-        val legacy = legacyDao.observeActive().first() + legacyDao.observePast().first()
-        legacy.forEach { goalDao.upsert(it.toPledgeGoal(now)) }
-        settings.setPledgesMigrated(true)
-        if (legacy.isNotEmpty()) {
-            Timber.tag("Goals").i("Migrated %d pledge(s) into the goals table", legacy.size)
-        }
-    }
 }

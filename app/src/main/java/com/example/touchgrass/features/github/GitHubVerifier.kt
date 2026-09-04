@@ -111,16 +111,6 @@ fun newGitHubGoal(
     deadlineAt = null
 )
 
-/** Legacy github_goals row → a recurring (Daily) goal, preserving streak. */
-fun GitHubGoalEntity.toGoalEntity(now: Long): GoalEntity =
-    newGitHubGoal(owner, repo, author, rewardPoints, penaltyShorts, now, Recurrence.Daily)
-        .copy(active = active)
-        .withRecurringState(
-            streak = currentStreak,
-            best = bestStreak,
-            met = lastSuccessDate == LocalDate.now().toString()
-        )
-
 /** Reshape an old-shape GITHUB_COMMIT row (already in the goals table) into the
  *  recurring model, preserving id/active/streak. Used by the one-time migration. */
 fun GoalEntity.reshapeGitHubToRecurring(): GoalEntity {

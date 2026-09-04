@@ -1,7 +1,6 @@
 package com.example.touchgrass.features.github
 
 import com.example.touchgrass.core.data.SettingsRepository
-import com.example.touchgrass.core.data.db.GitHubGoalDao
 import com.example.touchgrass.core.data.db.GitHubGoalEntity
 import com.example.touchgrass.core.data.db.GoalDao
 import com.example.touchgrass.core.goals.GoalOrchestrator
@@ -39,7 +38,6 @@ import javax.inject.Singleton
 @Singleton
 class GitHubGoalManager @Inject constructor(
     private val goalDao: GoalDao,
-    private val legacyDao: GitHubGoalDao,      // one-time migration of pre-goals-table rows
     private val orchestrator: GoalOrchestrator,
     private val api: GitHubApi,
     private val settings: SettingsRepository,
@@ -77,10 +75,7 @@ class GitHubGoalManager @Inject constructor(
         }.stateIn(scope, SharingStarted.Eagerly, false)
 
     init {
-        scope.launch {
-            migrateLegacyGoals()
-            migrateGitHubToRecurring()
-        }
+        scope.launch { migrateGitHubToRecurring() }
     }
 
     /**
@@ -122,17 +117,6 @@ class GitHubGoalManager @Inject constructor(
     /** Poll GitHub goals through the shared spine — sets metThisPeriod when a commit
      *  lands this period. Streaks/rewards/penalties are settled by the engine. */
     suspend fun runChecks() = orchestrator.runPolled()
-
-    private suspend fun migrateLegacyGoals() {
-        if (settings.githubGoalsMigrated.first()) return
-        val legacy = legacyDao.activeGoals()
-        val now = System.currentTimeMillis()
-        legacy.forEach { goalDao.upsert(it.toGoalEntity(now)) }
-        settings.setGithubGoalsMigrated(true)
-        if (legacy.isNotEmpty()) {
-            Timber.tag("GitHub").i("Migrated %d legacy goal(s) into the goals table", legacy.size)
-        }
-    }
 
     /** Option B: reshape pre-recurring GITHUB_COMMIT rows into the recurring model. */
     private suspend fun migrateGitHubToRecurring() {
