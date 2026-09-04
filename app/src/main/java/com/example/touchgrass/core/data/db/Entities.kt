@@ -86,6 +86,23 @@ data class GitHubGoalEntity(
 
 
 /**
+ * One completed (or ended-early) focus session. History for the Focus screen and
+ * the source of the "N successful sessions" stat. `outcome` is a FocusOutcome name.
+ */
+@Entity(tableName = "focus_sessions")
+data class FocusSessionEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val startedAt: Long,
+    val endedAt: Long,
+    val plannedFocusMin: Int,     // focus budget the session aimed for (breaks excluded)
+    val focusedMin: Int,          // focus minutes actually served
+    val cycles: Int,
+    val violations: Int,          // distraction opens bounced during focus blocks
+    val strict: Boolean,
+    val outcome: String           // FocusOutcome.name
+)
+
+/**
  * Unified goal record — will replace `commitments` + `github_goals` and wrap
  * shorts. Type-specific config/runtime live in JSON so a NEW goal type needs no
  * migration. Enums stored as names.

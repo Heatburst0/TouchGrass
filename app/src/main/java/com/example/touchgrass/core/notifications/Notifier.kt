@@ -70,6 +70,32 @@ class Notifier @Inject constructor(
         NotificationManagerCompat.from(context).notify(id, notification)
     }
 
+    /**
+     * A live-countdown notification for a running focus session. Android ticks the
+     * chronometer itself (no per-second updates from us). When [strict] the session
+     * is a commitment: the notification is ongoing and non-dismissible.
+     */
+    fun postFocusCountdown(title: String, endAt: Long, strict: Boolean) {
+        if (!hasPermission()) return
+        val tap = PendingIntent.getActivity(
+            context, Ids.FOCUS_ONGOING,
+            Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+        val notification = NotificationCompat.Builder(context, NotifChannel.GOALS.id)
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setContentTitle(title)
+            .setWhen(endAt)
+            .setUsesChronometer(true)
+            .setChronometerCountDown(true)
+            .setOnlyAlertOnce(true)
+            .setAutoCancel(false)
+            .setOngoing(strict)
+            .setContentIntent(tap)
+            .build()
+        NotificationManagerCompat.from(context).notify(Ids.FOCUS_ONGOING, notification)
+    }
+
     fun cancel(id: Int) = NotificationManagerCompat.from(context).cancel(id)
 
     /** POST_NOTIFICATIONS is runtime-granted on Android 13+; below that it's implicit. */
@@ -92,6 +118,8 @@ class Notifier @Inject constructor(
     /** Stable ids so updates/cancels target the right notification. */
     object Ids {
         const val ACCESSIBILITY_OFF = 1001
+        const val FOCUS_ONGOING = 1002
+        const val FOCUS_DONE = 1003
         fun commit(goalId: Long): Int = (2000L + goalId).toInt()
     }
 }

@@ -5,6 +5,7 @@ import androidx.hilt.work.HiltWorker
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import com.example.touchgrass.core.goals.GoalEngine
+import com.example.touchgrass.features.focus.FocusSessionManager
 import com.example.touchgrass.features.github.GitHubGoalManager
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
@@ -26,13 +27,15 @@ class GoalMaintenanceWorker @AssistedInject constructor(
     @Assisted appContext: Context,
     @Assisted params: WorkerParameters,
     private val goalEngine: GoalEngine,
-    private val gitHubGoalManager: GitHubGoalManager
+    private val gitHubGoalManager: GitHubGoalManager,
+    private val focusSessionManager: FocusSessionManager
 ) : CoroutineWorker(appContext, params) {
 
     override suspend fun doWork(): Result = try {
         gitHubGoalManager.runChecks()
         goalEngine.settleOverdue()
         goalEngine.settleRecurring()
+        focusSessionManager.settleIfComplete()   // backstop if the end-alarm was dropped
         Result.success()
     } catch (e: Exception) {
         Timber.tag("Goals").w(e, "Maintenance run failed; will retry")

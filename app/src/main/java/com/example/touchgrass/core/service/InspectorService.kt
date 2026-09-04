@@ -5,7 +5,7 @@ import android.content.Intent
 import android.view.accessibility.AccessibilityEvent
 import android.widget.Toast
 import com.example.touchgrass.core.analyzer.NodeTreeAnalyzer
-import com.example.touchgrass.core.focus.FocusSessionManager
+import com.example.touchgrass.features.focus.FocusSessionManager
 import com.example.touchgrass.core.manager.ShortsTrackerManager
 import com.example.touchgrass.core.notifications.Notifier
 import com.example.touchgrass.core.notifications.ServiceReminderWorker

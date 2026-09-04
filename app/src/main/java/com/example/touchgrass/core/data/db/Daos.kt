@@ -102,6 +102,38 @@ interface GitHubGoalDao {
     suspend fun activeGoals(): List<GitHubGoalEntity>
 }
 
+/** Aggregate stats for the Focus screen header. */
+data class FocusStats(
+    val completed: Int,
+    val total: Int,
+    val focusedMinutes: Int
+)
+
+@Dao
+interface FocusSessionDao {
+    @Insert
+    suspend fun insert(session: FocusSessionEntity): Long
+
+    @Query("SELECT * FROM focus_sessions ORDER BY startedAt DESC LIMIT :limit")
+    fun observeRecent(limit: Int = 30): Flow<List<FocusSessionEntity>>
+
+    /** Idempotency guard: a session's start-time uniquely identifies it, so a
+     *  double settle (alarm + app-open + End) records it only once. */
+    @Query("SELECT COUNT(*) FROM focus_sessions WHERE startedAt = :startedAt")
+    suspend fun countByStart(startedAt: Long): Int
+
+    @Query(
+        """
+        SELECT
+            COALESCE(SUM(CASE WHEN outcome = 'COMPLETED' THEN 1 ELSE 0 END), 0) AS completed,
+            COUNT(*) AS total,
+            COALESCE(SUM(focusedMin), 0) AS focusedMinutes
+        FROM focus_sessions
+        """
+    )
+    fun observeStats(): Flow<FocusStats>
+}
+
 @Dao
 interface PointsDao {
     @Insert

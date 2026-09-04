@@ -30,7 +30,7 @@ import com.example.touchgrass.features.reading.ui.LibraryScreen
 import com.example.touchgrass.features.reading.ui.QuizSessionScreen
 import com.example.touchgrass.features.reading.ui.ReaderScreen
 import com.example.touchgrass.presentation.dashboard.DoomscrollDashboard
-import com.example.touchgrass.presentation.focus.FocusScreen
+import com.example.touchgrass.features.focus.ui.FocusScreen
 import com.example.touchgrass.presentation.goals.GoalsScreen
 import com.example.touchgrass.presentation.tools.ToolsHubScreen
 import com.example.touchgrass.ui.theme.GrassGreen

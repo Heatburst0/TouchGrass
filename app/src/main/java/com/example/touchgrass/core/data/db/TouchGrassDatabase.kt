@@ -12,9 +12,10 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         PointsEntryEntity::class,
         CommitmentEntity::class,
         GitHubGoalEntity::class,
-        GoalEntity::class
+        GoalEntity::class,
+        FocusSessionEntity::class
     ],
-    version = 7,
+    version = 8,
     exportSchema = false
 )
 abstract class TouchGrassDatabase : RoomDatabase() {
@@ -24,6 +25,7 @@ abstract class TouchGrassDatabase : RoomDatabase() {
     abstract fun commitmentDao(): CommitmentDao
     abstract fun gitHubGoalDao(): GitHubGoalDao
     abstract fun goalDao(): GoalDao
+    abstract fun focusSessionDao(): FocusSessionDao
 
     companion object {
         /** v2: physical (paper) books with AI quiz verification. */
@@ -122,6 +124,27 @@ abstract class TouchGrassDatabase : RoomDatabase() {
             }
         }
 
+
+        /** v8: focus session history — the "N successful sessions" record. */
+        val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+            CREATE TABLE IF NOT EXISTS `focus_sessions` (
+                `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                `startedAt` INTEGER NOT NULL,
+                `endedAt` INTEGER NOT NULL,
+                `plannedFocusMin` INTEGER NOT NULL,
+                `focusedMin` INTEGER NOT NULL,
+                `cycles` INTEGER NOT NULL,
+                `violations` INTEGER NOT NULL,
+                `strict` INTEGER NOT NULL,
+                `outcome` TEXT NOT NULL
+            )
+            """.trimIndent()
+                )
+            }
+        }
 
         /** v4: commitments — verified pledges with a reward/penalty stake. */
         val MIGRATION_3_4 = object : Migration(3, 4) {

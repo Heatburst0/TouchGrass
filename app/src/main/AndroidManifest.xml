@@ -19,6 +19,9 @@
         tools:ignore="ProtectedPermissions" />
     <!-- AI comprehension quiz (Gemini API) -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Focus session end alarm (finalizes a session even when the app is closed) -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
 
     <application
         android:name=".TouchGrassApp"
@@ -77,6 +80,12 @@
                 android:value="androidx.startup"
                 tools:node="remove" />
         </provider>
+
+        <!-- Fires when a focus session reaches its end so it is recorded/credited
+             even if the app was closed. Not exported — only our alarm triggers it. -->
+        <receiver
+            android:name=".features.focus.FocusEndReceiver"
+            android:exported="false" />
 
         <service
             android:name=".core.service.InspectorService"

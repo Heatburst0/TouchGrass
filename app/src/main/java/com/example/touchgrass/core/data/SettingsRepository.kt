@@ -51,6 +51,7 @@ class SettingsRepository @Inject constructor(
         val PLEDGES_MIGRATED = booleanPreferencesKey("pledges_migrated")
         val GITHUB_RECURRING_MIGRATED = booleanPreferencesKey("github_recurring_migrated")
         val ACTIVE_FOCUS = stringPreferencesKey("active_focus")
+        val FOCUS_BLOCKED_PACKAGES = stringPreferencesKey("focus_blocked_packages")
     }
 
     val shortsLimit: Flow<Int> = context.dataStore.data
@@ -176,6 +177,20 @@ class SettingsRepository @Inject constructor(
 
     suspend fun setActiveFocusJson(json: String) {
         context.dataStore.edit { it[Keys.ACTIVE_FOCUS] = json }
+    }
+
+    /** The user's remembered focus blocklist (package names). Empty = fall back to
+     *  the default watched-apps seed at session start. */
+    val focusBlockedPackages: Flow<Set<String>> = context.dataStore.data.map { prefs ->
+        prefs[Keys.FOCUS_BLOCKED_PACKAGES]
+            ?.split(',')
+            ?.filter { it.isNotBlank() }
+            ?.toSet()
+            ?: emptySet()
+    }
+
+    suspend fun setFocusBlockedPackages(packages: Set<String>) {
+        context.dataStore.edit { it[Keys.FOCUS_BLOCKED_PACKAGES] = packages.joinToString(",") }
     }
 
     val pledgesMigrated: Flow<Boolean> = context.dataStore.data
