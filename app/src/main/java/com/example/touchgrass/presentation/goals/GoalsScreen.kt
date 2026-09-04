@@ -55,8 +55,8 @@ import com.example.touchgrass.core.data.SettingsRepository
 import com.example.touchgrass.core.data.db.GitHubGoalEntity
 import com.example.touchgrass.core.goals.CommitmentStatus
 import com.example.touchgrass.core.goals.GoalEngine
+import com.example.touchgrass.core.goals.GoalType
 import com.example.touchgrass.core.goals.GoalView
-import com.example.touchgrass.core.goals.PillarType
 import com.example.touchgrass.core.goals.Recurrence
 import com.example.touchgrass.core.rewards.RewardsManager
 import com.example.touchgrass.features.github.GitHubGoalManager
@@ -103,10 +103,12 @@ class GoalsViewModel @Inject constructor(
         viewModelScope.launch { gitHubManager.runChecks() }
     }
 
-    fun create(pillar: PillarType, title: String, target: Int, hours: Int, recurrence: Recurrence) {
+    fun create(title: String, target: Int, hours: Int, recurrence: Recurrence) {
         val deadline = System.currentTimeMillis() + hours.toLong() * 3_600_000L
         goalEngine.createCommitment(
-            pillar = pillar,
+            goalType = GoalType.READING,
+            category = "Reading",
+            unit = "pages",
             title = title,
             targetAmount = target,
             deadlineAt = deadline,
@@ -169,8 +171,8 @@ fun GoalsScreen(viewModel: GoalsViewModel = hiltViewModel()) {
     if (showCreate) {
         CreateCommitmentDialog(
             deadlineChoices = viewModel.deadlineChoices,
-            onConfirm = { pillar, title, target, hours, recurrence ->
-                viewModel.create(pillar, title, target, hours, recurrence)
+            onConfirm = { title, target, hours, recurrence ->
+                viewModel.create(title, target, hours, recurrence)
                 showCreate = false
             },
             onDismiss = { showCreate = false }
@@ -452,11 +454,9 @@ private fun StatusTag(status: CommitmentStatus, accent: androidx.compose.ui.grap
 @Composable
 private fun CreateCommitmentDialog(
     deadlineChoices: List<Pair<String, Int>>,
-    onConfirm: (PillarType, String, Int, Int, Recurrence) -> Unit,
+    onConfirm: (String, Int, Int, Recurrence) -> Unit,
     onDismiss: () -> Unit
 ) {
-    // Only Reading is wired to auto-verify today; others arrive with their pillars.
-    val pillar = PillarType.READING
     var title by remember { mutableStateOf("") }
     var target by remember { mutableIntStateOf(5) }
     var deadlineIndex by remember { mutableIntStateOf(0) }
@@ -556,7 +556,7 @@ private fun CreateCommitmentDialog(
         },
         confirmButton = {
             TextButton(
-                onClick = { onConfirm(pillar, title, target, deadlineChoices[deadlineIndex].second, recurrence) },
+                onClick = { onConfirm(title, target, deadlineChoices[deadlineIndex].second, recurrence) },
                 enabled = canConfirm
             ) {
                 Text(

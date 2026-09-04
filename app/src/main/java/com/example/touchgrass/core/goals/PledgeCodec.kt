@@ -15,7 +15,7 @@ import org.json.JSONObject
  */
 
 fun GoalEntity.pledgeCategory(): String =
-    JSONObject(configJson).optString("category", PillarType.READING.name)
+    JSONObject(configJson).optString("category", "Reading")
 
 fun GoalEntity.pledgeStatus(): CommitmentStatus =
     runCatching {
@@ -98,8 +98,15 @@ fun initialRecurringState(
 }
 
 
+/**
+ * Build a pledge goal. [goalType] is the verification mechanism (READING pledges
+ * are auto-credited by the reading path; a generic TASK pledge is manual/future);
+ * [category] is the life-area label shown in the UI, [unit] the counting noun.
+ */
 fun newPledgeGoal(
-    pillar: PillarType,
+    goalType: GoalType,
+    category: String,
+    unit: String,
     title: String,
     target: Int,
     deadlineAt: Long,
@@ -111,7 +118,7 @@ fun newPledgeGoal(
 ): GoalEntity {
     val recurring = recurrence != Recurrence.Once
     val config = JSONObject()
-        .put("category", pillar.name)
+        .put("category", category)
         .put("recurrence", RecurrenceSchedule.encode(recurrence))
     val state = JSONObject().put("status", CommitmentStatus.ACTIVE.name)
     if (recurring) {
@@ -120,12 +127,12 @@ fun newPledgeGoal(
             .put("periodEndAt", first?.endAt ?: 0L).put("metThisPeriod", false)
     }
     return GoalEntity(
-        type = GoalType.TASK.name,
+        type = goalType.name,
         title = title,
         direction = GoalDirection.ACHIEVE.name,
         schedule = if (recurring) GoalSchedule.ONGOING.name else GoalSchedule.ONE_SHOT.name,
         target = target,
-        unit = pillar.unit,
+        unit = unit,
         progress = 0,
         rewardPoints = reward,
         penaltyShorts = penalty,
@@ -137,9 +144,10 @@ fun newPledgeGoal(
     )
 }
 
-/** One-time migration of a legacy commitments row into a Task goal. */
+/** One-time migration of a legacy commitments row into a goal. Reading pledges
+ *  become first-class READING goals; anything else stays a generic TASK. */
 fun CommitmentEntity.toPledgeGoal(now: Long): GoalEntity = GoalEntity(
-    type = GoalType.TASK.name,
+    type = if (pillar.equals("READING", ignoreCase = true)) GoalType.READING.name else GoalType.TASK.name,
     title = title,
     direction = GoalDirection.ACHIEVE.name,
     schedule = GoalSchedule.ONE_SHOT.name,

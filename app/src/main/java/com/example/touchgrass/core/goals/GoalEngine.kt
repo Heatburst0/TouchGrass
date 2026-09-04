@@ -34,16 +34,21 @@ class GoalEngine @Inject constructor(
     private val settings: SettingsRepository,
     @ApplicationScope private val scope: CoroutineScope
 ) {
+    /** Goal types the Goals screen renders as "pledges": manual TASK goals and
+     *  first-class READING goals (auto-credited by the reading path). GitHub,
+     *  focus, and shorts are their own surfaces. */
+    private val pledgeTypes = setOf(GoalType.TASK.name, GoalType.READING.name)
+
     val activeCommitments: StateFlow<List<CommitmentEntity>> =
         goalDao.observeAll().map { all ->
-            all.filter { it.type == GoalType.TASK.name && it.active }
+            all.filter { it.type in pledgeTypes && it.active }
                 .sortedBy { it.deadlineAt ?: Long.MAX_VALUE }
                 .map { it.toCommitment() }
         }.stateIn(scope, SharingStarted.Eagerly, emptyList())
 
     val pastCommitments: StateFlow<List<CommitmentEntity>> =
         goalDao.observeAll().map { all ->
-            all.filter { it.type == GoalType.TASK.name && !it.active }
+            all.filter { it.type in pledgeTypes && !it.active }
                 .sortedByDescending { it.deadlineAt ?: 0L }
                 .take(30)
                 .map { it.toCommitment() }
@@ -52,14 +57,14 @@ class GoalEngine @Inject constructor(
     /** Richer read models for the Goals screen (recurrence + streak aware). */
     val activeGoals: StateFlow<List<GoalView>> =
         goalDao.observeAll().map { all ->
-            all.filter { it.type == GoalType.TASK.name && it.active }
+            all.filter { it.type in pledgeTypes && it.active }
                 .sortedBy { it.deadlineAt ?: Long.MAX_VALUE }
                 .map { it.toGoalView() }
         }.stateIn(scope, SharingStarted.Eagerly, emptyList())
 
     val pastGoals: StateFlow<List<GoalView>> =
         goalDao.observeAll().map { all ->
-            all.filter { it.type == GoalType.TASK.name && !it.active }
+            all.filter { it.type in pledgeTypes && !it.active }
                 .sortedByDescending { it.deadlineAt ?: 0L }
                 .take(30)
                 .map { it.toGoalView() }
@@ -69,34 +74,34 @@ class GoalEngine @Inject constructor(
 
 
     fun createCommitment(
-        pillar: PillarType, title: String, targetAmount: Int, deadlineAt: Long,
+        goalType: GoalType, category: String, unit: String,
+        title: String, targetAmount: Int, deadlineAt: Long,
         rewardPoints: Int, penaltyShorts: Int,
-        recurrence: Recurrence = Recurrence.Once           // NEW
+        recurrence: Recurrence = Recurrence.Once
     ) {
         scope.launch {
             goalDao.upsert(
-                newPledgeGoal(pillar, title.ifBlank { "${pillar.display} goal" },
+                newPledgeGoal(goalType, category, unit, title.ifBlank { "$category goal" },
                     targetAmount.coerceAtLeast(1), deadlineAt,
                     rewardPoints.coerceAtLeast(0), penaltyShorts.coerceAtLeast(0),
-                    System.currentTimeMillis(), recurrence)               // NEW arg
+                    System.currentTimeMillis(), recurrence)
             )
-            Timber.tag("Goals").i("New %s pledge (%s)", pillar.display, recurrence)
+            Timber.tag("Goals").i("New %s pledge (%s)", category, recurrence)
         }
     }
 
 
     /**
-     * Report [units] of verified work for [pillar]. Advances every active,
-     * not-yet-expired pledge for that pillar; any that reach target are marked
-     * MET and paid their bonus.
+     * Report [units] of verified work for goal [type] (e.g. verified reading pages
+     * → every active READING goal). Advances every active, not-yet-expired pledge
+     * of that type; any that reach target are marked MET and paid their bonus.
      */
-    fun recordProgress(pillar: PillarType, units: Int) {
+    fun recordProgress(type: GoalType, units: Int) {
         if (units <= 0) return
         scope.launch {
             settleOverdue(); settleRecurring()
             val now = System.currentTimeMillis()
-            goalDao.activeOfType(GoalType.TASK.name)
-                .filter { it.pledgeCategory() == pillar.name }
+            goalDao.activeOfType(type.name)
                 .forEach { g ->
                     if (g.recurrence() != Recurrence.Once) {
                         val (updated, metNow) = g.addRecurringProgress(units)
@@ -118,7 +123,8 @@ class GoalEngine @Inject constructor(
     /** Marks expired active pledges MISSED and applies their screen-time penalty. */
     suspend fun settleOverdue() {
         val now = System.currentTimeMillis()
-        goalDao.activeOfType(GoalType.TASK.name)
+        goalDao.observeActive().first()
+            .filter { it.type in pledgeTypes && it.recurrence() == Recurrence.Once }
             .filter { (it.deadlineAt ?: Long.MAX_VALUE) < now }
             .forEach { g ->
                 goalDao.upsert(g.withStatus(CommitmentStatus.MISSED))
