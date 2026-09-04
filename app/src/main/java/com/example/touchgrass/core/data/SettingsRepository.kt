@@ -50,6 +50,7 @@ class SettingsRepository @Inject constructor(
         val GITHUB_GOALS_MIGRATED = booleanPreferencesKey("github_goals_migrated")
         val PLEDGES_MIGRATED = booleanPreferencesKey("pledges_migrated")
         val GITHUB_RECURRING_MIGRATED = booleanPreferencesKey("github_recurring_migrated")
+        val ACTIVE_FOCUS = stringPreferencesKey("active_focus")
     }
 
     val shortsLimit: Flow<Int> = context.dataStore.data
@@ -166,6 +167,15 @@ class SettingsRepository @Inject constructor(
 
     suspend fun setGithubGoalsMigrated(done: Boolean) {
         context.dataStore.edit { it[Keys.GITHUB_GOALS_MIGRATED] = done }
+    }
+
+    // ---- Focus session (raw JSON; the focus layer (de)serializes it) ----
+
+    val activeFocusJson: Flow<String> = context.dataStore.data
+        .map { it[Keys.ACTIVE_FOCUS] ?: "" }
+
+    suspend fun setActiveFocusJson(json: String) {
+        context.dataStore.edit { it[Keys.ACTIVE_FOCUS] = json }
     }
 
     val pledgesMigrated: Flow<Boolean> = context.dataStore.data

@@ -5,6 +5,7 @@ import android.content.Intent
 import android.view.accessibility.AccessibilityEvent
 import android.widget.Toast
 import com.example.touchgrass.core.analyzer.NodeTreeAnalyzer
+import com.example.touchgrass.core.focus.FocusSessionManager
 import com.example.touchgrass.core.manager.ShortsTrackerManager
 import com.example.touchgrass.core.notifications.Notifier
 import com.example.touchgrass.core.notifications.ServiceReminderWorker
@@ -43,12 +44,17 @@ class InspectorService : AccessibilityService() {
     @Inject
     lateinit var notifier: Notifier
 
+    @Inject
+    lateinit var focusSessionManager: FocusSessionManager
+
     private var lastAnalysisTime = 0L
     private var lastGoalLockAt = 0L
+    private var lastFocusBlockAt = 0L
 
     companion object {
         private const val ANALYSIS_COOLDOWN_MS = 500L
         private const val GOAL_LOCK_COOLDOWN_MS = 3_000L
+        private const val FOCUS_BLOCK_COOLDOWN_MS = 2_000L
     }
 
     override fun onServiceConnected() {
@@ -95,6 +101,19 @@ class InspectorService : AccessibilityService() {
 
         // 2. PACKAGE CHECK
         val packageName = event.packageName?.toString() ?: return
+
+        // Focus session: bounce blocked apps during a focus block (any package).
+        if (focusSessionManager.shouldBlock(packageName)) {
+            focusSessionManager.registerViolation()
+            val now = System.currentTimeMillis()
+            if (now - lastFocusBlockAt >= FOCUS_BLOCK_COOLDOWN_MS) {
+                lastFocusBlockAt = now
+                Toast.makeText(this, "Focus mode — stay on task.", Toast.LENGTH_SHORT).show()
+                performGlobalAction(GLOBAL_ACTION_HOME)
+            }
+            return
+        }
+
         if (packageName !in ScreenTimeNudger.WATCHED_PACKAGES) {
             return
         }
