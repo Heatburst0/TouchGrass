@@ -73,6 +73,12 @@ class FocusSessionManager @Inject constructor(
         }
     }
 
+    /** Auto-start from a schedule — but never interrupt a session already running. */
+    fun startScheduled(config: FocusConfig) {
+        if (cached != null) return
+        start(config)
+    }
+
     /** User ended the session (non-strict). Records it (early or complete) and clears. */
     fun endEarly() {
         scope.launch { currentActive()?.let { settleInternal(it, clear = true) } }

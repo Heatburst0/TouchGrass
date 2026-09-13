@@ -42,6 +42,10 @@ class MainActivity : ComponentActivity() {
     @Inject
     lateinit var syncManager: com.example.touchgrass.core.remote.SyncManager
 
+    // Injecting starts recurring-schedule sync + arms the auto-start alarm.
+    @Inject
+    lateinit var focusScheduleRepository: com.example.touchgrass.features.focus.FocusScheduleRepository
+
     private val requestNotifications =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { /* result ignored */ }
 

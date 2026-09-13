@@ -51,6 +51,8 @@ class SettingsRepository @Inject constructor(
         val ACTIVE_FOCUS = stringPreferencesKey("active_focus")
         val FOCUS_BLOCKED_PACKAGES = stringPreferencesKey("focus_blocked_packages")
         val DEVICE_ID = stringPreferencesKey("device_id")
+        val SCHEDULE_CACHE = stringPreferencesKey("focus_schedule_cache")
+        val SCHEDULED_PENDING = stringPreferencesKey("focus_scheduled_pending")
     }
 
     val shortsLimit: Flow<Int> = context.dataStore.data
@@ -181,6 +183,26 @@ class SettingsRepository @Inject constructor(
 
     suspend fun setFocusBlockedPackages(packages: Set<String>) {
         context.dataStore.edit { it[Keys.FOCUS_BLOCKED_PACKAGES] = packages.joinToString(",") }
+    }
+
+    // ---- Focus schedules (recurring sessions) ----
+
+    /** Cached schedule list JSON so the alarm scheduler works offline. */
+    val scheduleCacheJson: Flow<String> = context.dataStore.data.map { it[Keys.SCHEDULE_CACHE] ?: "" }
+
+    suspend fun setScheduleCacheJson(json: String) {
+        context.dataStore.edit { it[Keys.SCHEDULE_CACHE] = json }
+    }
+
+    suspend fun getScheduleCacheJson(): String =
+        context.dataStore.data.first()[Keys.SCHEDULE_CACHE] ?: ""
+
+    /** The next scheduled session to auto-start ({fireAt, config}), read by the alarm. */
+    suspend fun getScheduledPending(): String =
+        context.dataStore.data.first()[Keys.SCHEDULED_PENDING] ?: ""
+
+    suspend fun setScheduledPending(json: String) {
+        context.dataStore.edit { it[Keys.SCHEDULED_PENDING] = json }
     }
 
     // ---- Stable per-install device id (for cross-device sync) ----

@@ -22,6 +22,8 @@
     <!-- Focus session end alarm (finalizes a session even when the app is closed) -->
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
+    <!-- Re-arm scheduled focus sessions after a device reboot -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <!-- See every launchable app so the focus blocklist picker can list them all
      (required by Android 11+ package visibility). -->
@@ -104,6 +106,20 @@
         <receiver
             android:name=".features.focus.FocusEndReceiver"
             android:exported="false" />
+
+        <!-- Fires when a scheduled (recurring) focus session is due -->
+        <receiver
+            android:name=".features.focus.FocusScheduleReceiver"
+            android:exported="false" />
+
+        <!-- Re-arms the next scheduled session after a reboot -->
+        <receiver
+            android:name=".features.focus.BootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
 
         <service
             android:name=".core.service.InspectorService"

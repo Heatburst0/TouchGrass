@@ -54,6 +54,8 @@ import com.example.touchgrass.core.data.db.FocusStats
 import com.example.touchgrass.core.screentime.ScreenTimeNudger
 import com.example.touchgrass.features.focus.AppInfo
 import com.example.touchgrass.features.focus.FocusConfig
+import com.example.touchgrass.features.focus.FocusSchedule
+import java.time.DayOfWeek
 import com.example.touchgrass.features.focus.FocusOutcome
 import com.example.touchgrass.features.focus.FocusPhase
 import com.example.touchgrass.features.focus.FocusSessionManager
@@ -80,12 +82,14 @@ import javax.inject.Inject
 class FocusViewModel @Inject constructor(
     private val manager: FocusSessionManager,
     private val settings: SettingsRepository,
-    private val installedApps: InstalledApps
+    private val installedApps: InstalledApps,
+    private val scheduleRepo: com.example.touchgrass.features.focus.FocusScheduleRepository
 ) : ViewModel() {
     val activeSession = manager.activeSession
     val recentSessions = manager.recentSessions
     val stats = manager.stats
     val rememberedBlocked = settings.focusBlockedPackages
+    val schedules = scheduleRepo.schedules
     val violations: Int get() = manager.violations
 
     val apps = MutableStateFlow<List<AppInfo>>(emptyList())
@@ -102,6 +106,13 @@ class FocusViewModel @Inject constructor(
         viewModelScope.launch { settings.setFocusBlockedPackages(packages) }
     }
     fun label(pkg: String): String = installedApps.label(pkg)
+
+    fun addSchedule(schedule: com.example.touchgrass.features.focus.FocusSchedule) {
+        viewModelScope.launch { scheduleRepo.create(schedule) }
+    }
+    fun deleteSchedule(id: String) {
+        viewModelScope.launch { scheduleRepo.delete(id) }
+    }
 }
 
 @Composable
@@ -111,6 +122,7 @@ fun FocusScreen(viewModel: FocusViewModel = hiltViewModel()) {
     val sessions by viewModel.recentSessions.collectAsState(initial = emptyList())
     val remembered by viewModel.rememberedBlocked.collectAsState(initial = emptySet())
     val apps by viewModel.apps.collectAsState()
+    val schedules by viewModel.schedules.collectAsState()
 
     // 1-second tick so countdowns update live; stops once the session is Done.
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
@@ -176,6 +188,13 @@ fun FocusScreen(viewModel: FocusViewModel = hiltViewModel()) {
             FocusPhase.Done -> DoneCard(violations = viewModel.violations, onClear = { viewModel.clearToIdle() })
         }
 
+        Spacer(Modifier.height(24.dp))
+        ScheduleSection(
+            schedules = schedules,
+            blocked = remembered,
+            onAdd = { viewModel.addSchedule(it) },
+            onDelete = { viewModel.deleteSchedule(it) }
+        )
         Spacer(Modifier.height(24.dp))
         HistorySection(stats = stats, sessions = sessions)
         Spacer(Modifier.height(24.dp))
@@ -562,4 +581,165 @@ private fun RoundBtn(symbol: String, onClick: () -> Unit) {
 private fun mmss(totalSec: Long): String {
     val s = totalSec.coerceAtLeast(0)
     return "%d:%02d".format(s / 60, s % 60)
+}
+
+// ---- recurring schedules ----
+
+@Composable
+private fun ScheduleSection(
+    schedules: List<FocusSchedule>,
+    blocked: Set<String>,
+    onAdd: (FocusSchedule) -> Unit,
+    onDelete: (String) -> Unit
+) {
+    var showDialog by remember { mutableStateOf(false) }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(20.dp))
+            .background(InkElevated)
+            .border(1.dp, InkBorder, RoundedCornerShape(20.dp))
+            .padding(20.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("Scheduled", color = TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            Text(
+                "+ Add",
+                color = GrassGreen, fontSize = 14.sp, fontWeight = FontWeight.Bold,
+                modifier = Modifier.clip(RoundedCornerShape(50)).clickable { showDialog = true }
+                    .padding(horizontal = 10.dp, vertical = 4.dp)
+            )
+        }
+        if (schedules.isEmpty()) {
+            Spacer(Modifier.height(10.dp))
+            Text("No schedules yet — auto-start focus at a set time, daily or on chosen days.",
+                color = TextSecondary, fontSize = 12.sp)
+        } else {
+            schedules.forEach { s ->
+                Spacer(Modifier.height(12.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("${s.timeLabel}  ·  ${s.daysLabel}", color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                        Text("${s.cycles}×${s.focusBlockMin}m focus · ${s.breakMin}m break", color = TextSecondary, fontSize = 11.sp)
+                    }
+                    Text("Remove", color = DangerRed, fontSize = 12.sp,
+                        modifier = Modifier.clickable { onDelete(s.id) }.padding(6.dp))
+                }
+            }
+        }
+    }
+    if (showDialog) {
+        AddScheduleDialog(
+            blocked = blocked,
+            onDismiss = { showDialog = false },
+            onConfirm = { onAdd(it); showDialog = false }
+        )
+    }
+}
+
+@Composable
+private fun AddScheduleDialog(
+    blocked: Set<String>,
+    onDismiss: () -> Unit,
+    onConfirm: (FocusSchedule) -> Unit
+) {
+    var hour by remember { mutableIntStateOf(9) }
+    var minute by remember { mutableIntStateOf(0) }
+    var everyDay by remember { mutableStateOf(true) }
+    var days by remember { mutableStateOf(FocusSchedule.WEEKDAYS) }
+    var focus by remember { mutableIntStateOf(25) }
+    var brk by remember { mutableIntStateOf(5) }
+    var cycles by remember { mutableIntStateOf(4) }
+
+    val canConfirm = everyDay || days.isNotEmpty()
+
+    Dialog(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(20.dp))
+                .background(InkElevated)
+                .border(1.dp, InkBorder, RoundedCornerShape(20.dp))
+                .verticalScroll(rememberScrollState())
+                .padding(18.dp)
+        ) {
+            Text("New schedule", color = TextPrimary, fontSize = 17.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(14.dp))
+            StepperRow("Hour", "%02d".format(hour), { hour = (hour + 23) % 24 }) { hour = (hour + 1) % 24 }
+            Spacer(Modifier.height(10.dp))
+            StepperRow("Minute", "%02d".format(minute), { minute = (minute + 55) % 60 }) { minute = (minute + 5) % 60 }
+            Spacer(Modifier.height(14.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("Every day", color = TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                Switch(
+                    checked = everyDay,
+                    onCheckedChange = { everyDay = it },
+                    colors = SwitchDefaults.colors(checkedThumbColor = Ink, checkedTrackColor = GrassGreen, uncheckedTrackColor = InkBorder)
+                )
+            }
+            if (!everyDay) {
+                Spacer(Modifier.height(8.dp))
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    DayOfWeek.values().forEach { d ->
+                        val sel = d in days
+                        Box(
+                            modifier = Modifier
+                                .size(34.dp)
+                                .clip(CircleShape)
+                                .background(if (sel) GrassGreen else Ink)
+                                .border(1.dp, if (sel) GrassGreen else InkBorder, CircleShape)
+                                .clickable { days = if (sel) days - d else days + d },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(d.name.take(1), color = if (sel) Ink else TextPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(14.dp))
+            StepperRow("Focus block", "$focus min", { focus = (focus - 5).coerceAtLeast(FocusConfig.MIN_FOCUS) }) { focus = (focus + 5).coerceAtMost(FocusConfig.MAX_FOCUS) }
+            Spacer(Modifier.height(10.dp))
+            StepperRow("Break", "${FocusConfig.capBreak(focus, brk)} min", { brk = (brk - 5).coerceAtLeast(FocusConfig.MIN_BREAK) }) { brk += 5 }
+            Spacer(Modifier.height(10.dp))
+            StepperRow("Cycles", "$cycles", { cycles = (cycles - 1).coerceAtLeast(1) }) { cycles = (cycles + 1).coerceAtMost(FocusConfig.MAX_CYCLES) }
+
+            Spacer(Modifier.height(16.dp))
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                Text("Cancel", color = TextSecondary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.clickable { onDismiss() }.padding(12.dp))
+                Spacer(Modifier.size(8.dp))
+                Text("Add", color = if (canConfirm) GrassGreen else TextSecondary, fontSize = 14.sp, fontWeight = FontWeight.Bold,
+                    modifier = Modifier.clickable(enabled = canConfirm) {
+                        onConfirm(
+                            FocusSchedule(
+                                id = "",
+                                title = "Focus",
+                                days = if (everyDay) null else days,
+                                hour = hour,
+                                minute = minute,
+                                focusBlockMin = focus,
+                                breakMin = FocusConfig.capBreak(focus, brk),
+                                cycles = cycles,
+                                blockedPackages = blocked.ifEmpty { ScreenTimeNudger.WATCHED_PACKAGES },
+                                enabled = true
+                            )
+                        )
+                    }.padding(12.dp))
+            }
+        }
+    }
 }
