@@ -1,0 +1,33 @@
+# Supabase project config (CLI). Used for local dev (`supabase start`) and as the
+# project scaffold. Cloud settings live in the dashboard; secrets never go here.
+project_id = "touchgrass"
+
+[api]
+enabled = true
+port = 54321
+schemas = ["public"]
+extra_search_path = ["public"]
+max_rows = 1000
+
+[db]
+port = 54322
+major_version = 15
+
+[realtime]
+enabled = true
+
+[auth]
+enabled = true
+# Set to your app/site URL in the dashboard for production redirects.
+site_url = "http://localhost:3000"
+additional_redirect_urls = ["touchgrass://auth-callback"]
+jwt_expiry = 3600
+enable_signup = true
+
+[auth.email]
+enable_signup = true
+enable_confirmations = true
+
+[studio]
+enabled = true
+port = 54323
