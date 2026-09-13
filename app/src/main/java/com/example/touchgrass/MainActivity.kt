@@ -38,6 +38,10 @@ class MainActivity : ComponentActivity() {
     @Inject
     lateinit var deviceRegistrar: DeviceRegistrar
 
+    // Injecting starts cross-device sync (focus sessions push/pull + realtime).
+    @Inject
+    lateinit var syncManager: com.example.touchgrass.core.remote.SyncManager
+
     private val requestNotifications =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { /* result ignored */ }
 

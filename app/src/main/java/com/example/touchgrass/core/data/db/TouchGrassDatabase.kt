@@ -13,7 +13,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         GoalEntity::class,
         FocusSessionEntity::class
     ],
-    version = 9,
+    version = 10,
     exportSchema = false
 )
 abstract class TouchGrassDatabase : RoomDatabase() {
@@ -128,6 +128,15 @@ abstract class TouchGrassDatabase : RoomDatabase() {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("DROP TABLE IF EXISTS `commitments`")
                 db.execSQL("DROP TABLE IF EXISTS `github_goals`")
+            }
+        }
+
+        /** v10: cross-device sync columns on focus_sessions (stable uid + push/remote flags). */
+        val MIGRATION_9_10 = object : Migration(9, 10) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE focus_sessions ADD COLUMN uid TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE focus_sessions ADD COLUMN synced INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE focus_sessions ADD COLUMN remote INTEGER NOT NULL DEFAULT 0")
             }
         }
 

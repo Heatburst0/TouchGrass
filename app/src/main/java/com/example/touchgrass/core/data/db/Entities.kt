@@ -97,7 +97,10 @@ data class FocusSessionEntity(
     val cycles: Int,
     val violations: Int,          // distraction opens bounced during focus blocks
     val strict: Boolean,
-    val outcome: String           // FocusOutcome.name
+    val outcome: String,          // FocusOutcome.name
+    val uid: String = "",         // stable cross-device id (= Supabase row id); "" until assigned
+    val synced: Boolean = false,  // pushed to the backend yet?
+    val remote: Boolean = false   // pulled from another device (vs recorded here)
 )
 
 /**

@@ -31,7 +31,8 @@ object DatabaseModule {
                 TouchGrassDatabase.MIGRATION_5_6,
                 TouchGrassDatabase.MIGRATION_6_7,
                 TouchGrassDatabase.MIGRATION_7_8,
-                TouchGrassDatabase.MIGRATION_8_9
+                TouchGrassDatabase.MIGRATION_8_9,
+                TouchGrassDatabase.MIGRATION_9_10
             )
             .build()
 

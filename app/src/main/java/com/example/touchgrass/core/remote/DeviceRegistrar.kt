@@ -42,7 +42,9 @@ class DeviceRegistrar @Inject constructor(
         }
     }
 
-    private suspend fun register() {
+    /** Idempotent upsert of this device. Public so the sync flow can await it
+     *  before pushing rows that reference device_id. */
+    suspend fun register() {
         runCatching {
             val d = deviceIdentity.current()
             supabase.from("devices").upsert(DeviceRow(d.id, d.platform.name, d.name))

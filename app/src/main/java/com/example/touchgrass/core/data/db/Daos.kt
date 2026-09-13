@@ -83,6 +83,18 @@ interface FocusSessionDao {
     @Query("SELECT COUNT(*) FROM focus_sessions WHERE startedAt = :startedAt")
     suspend fun countByStart(startedAt: Long): Int
 
+    // ---- cross-device sync ----
+
+    /** Local sessions not yet pushed to the backend. */
+    @Query("SELECT * FROM focus_sessions WHERE synced = 0 AND remote = 0")
+    suspend fun unsynced(): List<FocusSessionEntity>
+
+    @Query("UPDATE focus_sessions SET uid = :uid, synced = 1 WHERE id = :id")
+    suspend fun markSynced(id: Long, uid: String)
+
+    @Query("SELECT COUNT(*) FROM focus_sessions WHERE uid = :uid")
+    suspend fun countByUid(uid: String): Int
+
     @Query(
         """
         SELECT
