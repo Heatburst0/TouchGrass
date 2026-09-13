@@ -6,6 +6,7 @@ plugins {
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.ksp) // Replaces kapt for faster builds
     alias(libs.plugins.hilt.android)
+    alias(libs.plugins.kotlin.serialization) // @Serializable DTOs for Supabase
 }
 
 // API keys live in local.properties (never committed)
@@ -35,6 +36,19 @@ android {
             "String",
             "GEMINI_API_KEY",
             "\"${localProperties.getProperty("GEMINI_API_KEY") ?: ""}\""
+        )
+
+        // Supabase backend. Public client values (RLS protects data); never the
+        // service_role key. Add supabase.url / supabase.anonKey to local.properties.
+        buildConfigField(
+            "String",
+            "SUPABASE_URL",
+            "\"${localProperties.getProperty("supabase.url") ?: ""}\""
+        )
+        buildConfigField(
+            "String",
+            "SUPABASE_ANON_KEY",
+            "\"${localProperties.getProperty("supabase.anonKey") ?: ""}\""
         )
     }
 
@@ -106,4 +120,11 @@ dependencies {
     implementation(libs.androidx.work.runtime)
     implementation(libs.androidx.hilt.work)
     ksp(libs.androidx.hilt.compiler)
+
+    // Supabase (auth + postgrest + realtime) — cross-device backend
+    implementation(platform(libs.supabase.bom))
+    implementation(libs.supabase.postgrest)
+    implementation(libs.supabase.auth)
+    implementation(libs.supabase.realtime)
+    implementation(libs.ktor.client.android)
 }

@@ -1,6 +1,7 @@
 package com.example.touchgrass
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -11,9 +12,13 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import com.example.touchgrass.core.goals.GoalEngine
+import com.example.touchgrass.core.remote.AuthRepository
+import com.example.touchgrass.core.remote.DeviceRegistrar
 import com.example.touchgrass.presentation.navigation.TouchGrassAppRoot
 import com.example.touchgrass.ui.theme.TouchGrassTheme
 import dagger.hilt.android.AndroidEntryPoint
+import io.github.jan.supabase.SupabaseClient
+import io.github.jan.supabase.auth.handleDeeplinks
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -23,6 +28,16 @@ class MainActivity : ComponentActivity() {
     @Inject
     lateinit var goalEngine: GoalEngine
 
+    @Inject
+    lateinit var supabase: SupabaseClient
+
+    @Inject
+    lateinit var authRepository: AuthRepository
+
+    // Injecting starts the sign-in → device-registration observer.
+    @Inject
+    lateinit var deviceRegistrar: DeviceRegistrar
+
     private val requestNotifications =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { /* result ignored */ }
 
@@ -30,12 +45,20 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         maybeRequestNotificationPermission()
+        // Complete a magic-link sign-in if we were opened via touchgrass://auth-callback.
+        if (authRepository.isConfigured) supabase.handleDeeplinks(intent)
         val startRoute = intent.getStringExtra(EXTRA_START_ROUTE)
         setContent {
             TouchGrassTheme {
                 TouchGrassAppRoot(startRoute = startRoute)
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if (authRepository.isConfigured) supabase.handleDeeplinks(intent)
     }
 
     override fun onResume() {

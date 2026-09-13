@@ -29,6 +29,7 @@ import com.example.touchgrass.core.data.db.BookEntity
 import com.example.touchgrass.features.reading.ui.LibraryScreen
 import com.example.touchgrass.features.reading.ui.QuizSessionScreen
 import com.example.touchgrass.features.reading.ui.ReaderScreen
+import com.example.touchgrass.presentation.account.AccountScreen
 import com.example.touchgrass.presentation.dashboard.DoomscrollDashboard
 import com.example.touchgrass.features.focus.ui.FocusScreen
 import com.example.touchgrass.presentation.goals.GoalsScreen
@@ -44,6 +45,7 @@ object Routes {
     const val GOALS = "goals"
     const val FOCUS = "focus"
     const val TOOLS = "tools"
+    const val ACCOUNT = "account"
     const val LIBRARY = "library"
     const val READER = "reader/{bookId}"
     const val QUIZ = "quiz/{bookId}"
@@ -121,6 +123,9 @@ fun TouchGrassAppRoot(startRoute: String? = null) {
             }
             composable(Routes.TOOLS) {
                 ToolsHubScreen(onOpenRoute = { navController.navigate(it) })
+            }
+            composable(Routes.ACCOUNT) {
+                AccountScreen()
             }
             composable(Routes.LIBRARY) {
                 LibraryScreen(onOpenBook = { item ->

@@ -78,6 +78,12 @@ data class ProductivityTool(
 
 val PRODUCTIVITY_TOOLS = listOf(
     ProductivityTool(
+        id = "account",
+        title = "Account & sync",
+        description = "Sign in to sync focus, goals and points across your devices",
+        route = "account"
+    ),
+    ProductivityTool(
         id = "reading",
         title = "Book reading",
         description = "Read verified pages, earn points, buy your shorts back",
