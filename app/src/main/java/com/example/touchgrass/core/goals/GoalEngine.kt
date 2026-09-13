@@ -66,7 +66,7 @@ class GoalEngine @Inject constructor(
                 .map { it.toGoalView() }
         }.stateIn(scope, SharingStarted.Eagerly, emptyList())
 
-    init { scope.launch { settleOverdue(); settleRecurring() } }
+    init { scope.launch { migrateReadingPledgesToType(); settleOverdue(); settleRecurring() } }
 
 
     fun createCommitment(
@@ -159,6 +159,18 @@ class GoalEngine @Inject constructor(
                 }
             }
     }
+    /**
+     * Reading pledges created before reading became a first-class type were stored as
+     * TASK + category "Reading". Reclassify them to GoalType.READING so verified pages
+     * (recordProgress(READING)) advance them again. Idempotent — once converted they no
+     * longer match, so no flag is needed.
+     */
+    private suspend fun migrateReadingPledgesToType() {
+        goalDao.observeAll().first()
+            .filter { it.type == GoalType.TASK.name && it.pledgeCategory().equals("reading", ignoreCase = true) }
+            .forEach { goalDao.upsert(it.copy(type = GoalType.READING.name)) }
+    }
+
 
 
 }
