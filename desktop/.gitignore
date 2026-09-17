@@ -1,0 +1,5 @@
+/target
+Cargo.lock
+# local agent config (holds a refresh token) if placed here instead of ~/.config
+agent.toml
+.env

@@ -1,0 +1,23 @@
+[package]
+name = "touchgrass-agent"
+version = "0.1.0"
+edition = "2021"
+description = "TouchGrass laptop focus agent — input-activity + active-window tracking, synced to Supabase."
+
+[[bin]]
+name = "touchgrass-agent"
+path = "src/main.rs"
+
+[dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+dirs = "5"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4"] }
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+device_query = "2.1"
+active-win-pos-rs = "0.8"
+gethostname = "0.5"

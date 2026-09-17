@@ -1,0 +1,13 @@
+# Copy this to your OS config dir as touchgrass/agent.toml:
+#   Windows: %APPDATA%\touchgrass\agent.toml
+#   macOS:   ~/Library/Application Support/touchgrass/agent.toml
+#   Linux:   ~/.config/touchgrass/agent.toml
+# Then run `touchgrass-agent login`. The agent fills in email / device_id /
+# refresh_token itself — you only set the two values below (and optionally the apps).
+
+supabase_url = "https://YOUR_REF.supabase.co"
+anon_key = "sb_publishable_XXXXXXXX"
+
+# Substrings matched (case-insensitive) against the active window's app name to
+# decide what counts as productive during a focus session.
+allowed_apps = ["Code", "studio64", "idea", "devenv", "WindowsTerminal", "Terminal"]

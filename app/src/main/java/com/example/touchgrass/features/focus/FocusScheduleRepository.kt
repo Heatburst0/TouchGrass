@@ -162,7 +162,8 @@ class FocusScheduleRepository @Inject constructor(
             focus_block_min = focusBlockMin,
             break_min = breakMin,
             cycles = cycles,
-            target_platforms = listOf("ANDROID"),
+            // Both platforms so the schedule drives the phone AND the laptop agent.
+            target_platforms = listOf("ANDROID", "DESKTOP"),
             config = ScheduleConfigJson(blockedPackages.toList(), reminders.toList()),
             enabled = enabled
         )
