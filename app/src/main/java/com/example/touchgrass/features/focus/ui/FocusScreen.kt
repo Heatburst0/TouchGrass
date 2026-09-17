@@ -36,17 +36,22 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewModelScope
 import com.example.touchgrass.core.data.SettingsRepository
 import com.example.touchgrass.core.data.db.FocusSessionEntity
@@ -60,7 +65,9 @@ import com.example.touchgrass.features.focus.FocusOutcome
 import com.example.touchgrass.features.focus.FocusPhase
 import com.example.touchgrass.features.focus.FocusSessionManager
 import com.example.touchgrass.features.focus.InstalledApps
+import com.example.touchgrass.features.focus.FocusScheduleScheduler
 import com.example.touchgrass.features.focus.focusPhaseAt
+import com.example.touchgrass.isAccessibilityEnabled
 import com.example.touchgrass.ui.theme.AmberWarn
 import com.example.touchgrass.ui.theme.DangerRed
 import com.example.touchgrass.ui.theme.GrassGreen
@@ -124,6 +131,18 @@ fun FocusScreen(viewModel: FocusViewModel = hiltViewModel()) {
     val apps by viewModel.apps.collectAsState()
     val schedules by viewModel.schedules.collectAsState()
 
+    // Accessibility must be on for any blocking to work — refresh on resume.
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var accessibilityOn by remember { mutableStateOf(isAccessibilityEnabled(context)) }
+    DisposableEffect(lifecycleOwner) {
+        val obs = LifecycleEventObserver { _, e ->
+            if (e == Lifecycle.Event.ON_RESUME) accessibilityOn = isAccessibilityEnabled(context)
+        }
+        lifecycleOwner.lifecycle.addObserver(obs)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(obs) }
+    }
+
     // 1-second tick so countdowns update live; stops once the session is Done.
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(active) {
@@ -156,6 +175,15 @@ fun FocusScreen(viewModel: FocusViewModel = hiltViewModel()) {
             color = TextSecondary, fontSize = 13.sp, textAlign = TextAlign.Center
         )
         Spacer(Modifier.height(20.dp))
+
+        if (!accessibilityOn) {
+            AccessibilityWarning(onEnable = {
+                context.startActivity(
+                    android.content.Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                )
+            })
+            Spacer(Modifier.height(16.dp))
+        }
 
         when (phase) {
             FocusPhase.Idle -> SetupCard(
@@ -583,6 +611,35 @@ private fun mmss(totalSec: Long): String {
     return "%d:%02d".format(s / 60, s % 60)
 }
 
+// ---- accessibility gate ----
+
+@Composable
+private fun AccessibilityWarning(onEnable: () -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(DangerRed.copy(alpha = 0.12f))
+            .border(1.dp, DangerRed.copy(alpha = 0.5f), RoundedCornerShape(16.dp))
+            .padding(16.dp)
+    ) {
+        Text("Accessibility is off", color = DangerRed, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "Focus sessions can't block apps until TouchGrass's accessibility service is on. " +
+                "Scheduled sessions still start, but nothing will be blocked.",
+            color = TextSecondary, fontSize = 12.sp, lineHeight = 16.sp
+        )
+        Spacer(Modifier.height(12.dp))
+        Button(
+            onClick = onEnable,
+            modifier = Modifier.fillMaxWidth().height(44.dp),
+            shape = RoundedCornerShape(12.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = DangerRed, contentColor = Ink)
+        ) { Text("Turn on accessibility", fontSize = 13.sp, fontWeight = FontWeight.Bold) }
+    }
+}
+
 // ---- recurring schedules ----
 
 @Composable
@@ -593,6 +650,7 @@ private fun ScheduleSection(
     onDelete: (String) -> Unit
 ) {
     var showDialog by remember { mutableStateOf(false) }
+    var editing by remember { mutableStateOf<FocusSchedule?>(null) }
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -610,7 +668,7 @@ private fun ScheduleSection(
             Text(
                 "+ Add",
                 color = GrassGreen, fontSize = 14.sp, fontWeight = FontWeight.Bold,
-                modifier = Modifier.clip(RoundedCornerShape(50)).clickable { showDialog = true }
+                modifier = Modifier.clip(RoundedCornerShape(50)).clickable { editing = null; showDialog = true }
                     .padding(horizontal = 10.dp, vertical = 4.dp)
             )
         }
@@ -622,14 +680,23 @@ private fun ScheduleSection(
             schedules.forEach { s ->
                 Spacer(Modifier.height(12.dp))
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.fillMaxWidth()
+                        .clip(RoundedCornerShape(10.dp))
+                        .clickable { editing = s; showDialog = true }
+                        .padding(vertical = 2.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Column(Modifier.weight(1f)) {
                         Text("${s.timeLabel}  ·  ${s.daysLabel}", color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-                        Text("${s.cycles}×${s.focusBlockMin}m focus · ${s.breakMin}m break", color = TextSecondary, fontSize = 11.sp)
+                        Text(
+                            "${s.totalMinutes}m (${s.cycles}×${s.focusBlockMin}m)" +
+                                (if (s.reminders.isNotEmpty()) " · reminders on" else ""),
+                            color = TextSecondary, fontSize = 11.sp
+                        )
                     }
+                    Text("Edit", color = GrassGreen, fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.clickable { editing = s; showDialog = true }.padding(6.dp))
                     Text("Remove", color = DangerRed, fontSize = 12.sp,
                         modifier = Modifier.clickable { onDelete(s.id) }.padding(6.dp))
                 }
@@ -637,7 +704,8 @@ private fun ScheduleSection(
         }
     }
     if (showDialog) {
-        AddScheduleDialog(
+        ScheduleDialog(
+            editing = editing,
             blocked = blocked,
             onDismiss = { showDialog = false },
             onConfirm = { onAdd(it); showDialog = false }
@@ -646,19 +714,23 @@ private fun ScheduleSection(
 }
 
 @Composable
-private fun AddScheduleDialog(
+private fun ScheduleDialog(
+    editing: FocusSchedule?,
     blocked: Set<String>,
     onDismiss: () -> Unit,
     onConfirm: (FocusSchedule) -> Unit
 ) {
-    var hour by remember { mutableIntStateOf(9) }
-    var minute by remember { mutableIntStateOf(0) }
-    var everyDay by remember { mutableStateOf(true) }
-    var days by remember { mutableStateOf(FocusSchedule.WEEKDAYS) }
-    var focus by remember { mutableIntStateOf(25) }
-    var brk by remember { mutableIntStateOf(5) }
-    var cycles by remember { mutableIntStateOf(4) }
+    var hour by remember { mutableIntStateOf(editing?.hour ?: 9) }
+    var minute by remember { mutableIntStateOf(editing?.minute ?: 0) }
+    var everyDay by remember { mutableStateOf(editing?.days == null) }
+    var days by remember { mutableStateOf(editing?.days ?: FocusSchedule.WEEKDAYS) }
+    var focus by remember { mutableIntStateOf(editing?.focusBlockMin ?: 25) }
+    var brk by remember { mutableIntStateOf(editing?.breakMin ?: 5) }
+    var cycles by remember { mutableIntStateOf(editing?.cycles ?: 4) }
+    var reminders by remember { mutableStateOf(editing?.reminders ?: setOf(5)) }
 
+    val cappedBreak = FocusConfig.capBreak(focus, brk)
+    val total = cycles * focus + (cycles - 1).coerceAtLeast(0) * cappedBreak
     val canConfirm = everyDay || days.isNotEmpty()
 
     Dialog(onDismissRequest = onDismiss) {
@@ -671,7 +743,7 @@ private fun AddScheduleDialog(
                 .verticalScroll(rememberScrollState())
                 .padding(18.dp)
         ) {
-            Text("New schedule", color = TextPrimary, fontSize = 17.sp, fontWeight = FontWeight.Bold)
+            Text(if (editing == null) "New schedule" else "Edit schedule", color = TextPrimary, fontSize = 17.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(14.dp))
             StepperRow("Hour", "%02d".format(hour), { hour = (hour + 23) % 24 }) { hour = (hour + 1) % 24 }
             Spacer(Modifier.height(10.dp))
@@ -713,28 +785,52 @@ private fun AddScheduleDialog(
             Spacer(Modifier.height(14.dp))
             StepperRow("Focus block", "$focus min", { focus = (focus - 5).coerceAtLeast(FocusConfig.MIN_FOCUS) }) { focus = (focus + 5).coerceAtMost(FocusConfig.MAX_FOCUS) }
             Spacer(Modifier.height(10.dp))
-            StepperRow("Break", "${FocusConfig.capBreak(focus, brk)} min", { brk = (brk - 5).coerceAtLeast(FocusConfig.MIN_BREAK) }) { brk += 5 }
+            StepperRow("Break", "$cappedBreak min", { brk = (brk - 5).coerceAtLeast(FocusConfig.MIN_BREAK) }) { brk += 5 }
             Spacer(Modifier.height(10.dp))
             StepperRow("Cycles", "$cycles", { cycles = (cycles - 1).coerceAtLeast(1) }) { cycles = (cycles + 1).coerceAtMost(FocusConfig.MAX_CYCLES) }
+
+            Spacer(Modifier.height(10.dp))
+            Text("Total $total min per run", color = AmberWarn, fontSize = 12.sp)
+
+            Spacer(Modifier.height(14.dp))
+            Text("Remind me before", color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.height(6.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FocusScheduleScheduler.REMINDER_OFFSETS.forEach { m ->
+                    val sel = m in reminders
+                    val label = when (m) { 60 -> "1h"; else -> "${m}m" }
+                    Text(
+                        label,
+                        color = if (sel) Ink else TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(50))
+                            .background(if (sel) GrassGreen else Ink)
+                            .border(1.dp, if (sel) GrassGreen else InkBorder, RoundedCornerShape(50))
+                            .clickable { reminders = if (sel) reminders - m else reminders + m }
+                            .padding(horizontal = 14.dp, vertical = 7.dp)
+                    )
+                }
+            }
 
             Spacer(Modifier.height(16.dp))
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                 Text("Cancel", color = TextSecondary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
                     modifier = Modifier.clickable { onDismiss() }.padding(12.dp))
                 Spacer(Modifier.size(8.dp))
-                Text("Add", color = if (canConfirm) GrassGreen else TextSecondary, fontSize = 14.sp, fontWeight = FontWeight.Bold,
+                Text(if (editing == null) "Add" else "Save", color = if (canConfirm) GrassGreen else TextSecondary, fontSize = 14.sp, fontWeight = FontWeight.Bold,
                     modifier = Modifier.clickable(enabled = canConfirm) {
                         onConfirm(
                             FocusSchedule(
-                                id = "",
+                                id = editing?.id ?: "",
                                 title = "Focus",
                                 days = if (everyDay) null else days,
                                 hour = hour,
                                 minute = minute,
                                 focusBlockMin = focus,
-                                breakMin = FocusConfig.capBreak(focus, brk),
+                                breakMin = cappedBreak,
                                 cycles = cycles,
                                 blockedPackages = blocked.ifEmpty { ScreenTimeNudger.WATCHED_PACKAGES },
+                                reminders = reminders,
                                 enabled = true
                             )
                         )

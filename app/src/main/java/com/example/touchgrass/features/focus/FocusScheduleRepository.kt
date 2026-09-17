@@ -27,7 +27,10 @@ import javax.inject.Singleton
 private data class RecurrenceJson(val type: String = "DAILY", val days: List<String> = emptyList())
 
 @Serializable
-private data class ScheduleConfigJson(val blocked: List<String> = emptyList())
+private data class ScheduleConfigJson(
+    val blocked: List<String> = emptyList(),
+    val reminders: List<Int> = emptyList()
+)
 
 @Serializable
 private data class RemoteSchedule(
@@ -144,6 +147,7 @@ class FocusScheduleRepository @Inject constructor(
                 breakMin = break_min,
                 cycles = cycles,
                 blockedPackages = config.blocked.toSet(),
+                reminders = config.reminders.toSet(),
                 enabled = enabled && target_platforms.contains("ANDROID")
             )
         }
@@ -159,7 +163,7 @@ class FocusScheduleRepository @Inject constructor(
             break_min = breakMin,
             cycles = cycles,
             target_platforms = listOf("ANDROID"),
-            config = ScheduleConfigJson(blockedPackages.toList()),
+            config = ScheduleConfigJson(blockedPackages.toList(), reminders.toList()),
             enabled = enabled
         )
     }

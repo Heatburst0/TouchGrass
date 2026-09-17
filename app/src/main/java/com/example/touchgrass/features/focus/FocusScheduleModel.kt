@@ -22,8 +22,12 @@ data class FocusSchedule(
     val breakMin: Int,
     val cycles: Int,
     val blockedPackages: Set<String>,
+    val reminders: Set<Int> = emptySet(),   // minutes-before to notify (e.g. 60, 5)
     val enabled: Boolean
 ) {
+    /** Whole session length including breaks. */
+    val totalMinutes: Int get() = cycles * focusBlockMin + (cycles - 1).coerceAtLeast(0) * breakMin
+
     fun toConfig(): FocusConfig = FocusConfig(
         focusBlockMin = focusBlockMin,
         breakMin = FocusConfig.capBreak(focusBlockMin, breakMin),

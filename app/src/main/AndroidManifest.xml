@@ -112,6 +112,11 @@
             android:name=".features.focus.FocusScheduleReceiver"
             android:exported="false" />
 
+        <!-- Pre-session reminder notifications (e.g. 1h / 5m before) -->
+        <receiver
+            android:name=".features.focus.ReminderReceiver"
+            android:exported="false" />
+
         <!-- Re-arms the next scheduled session after a reboot -->
         <receiver
             android:name=".features.focus.BootReceiver"

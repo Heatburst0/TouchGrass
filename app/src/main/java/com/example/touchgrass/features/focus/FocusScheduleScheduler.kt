@@ -24,9 +24,10 @@ class FocusScheduleScheduler @Inject constructor(
 ) {
     private val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
 
-    /** Recompute the soonest schedule, persist it, and arm the alarm. */
+    /** Recompute the soonest schedule, persist it, and arm the alarm + reminders. */
     suspend fun reschedule(schedules: List<FocusSchedule>) {
         val now = System.currentTimeMillis()
+        cancelReminders()
         val next = schedules
             .mapNotNull { s -> s.nextRunAt(now)?.let { it to s } }
             .minByOrNull { it.first }
@@ -35,9 +36,38 @@ class FocusScheduleScheduler @Inject constructor(
             cancelAlarm()
             return
         }
-        settings.setScheduledPending(pendingJson(next.first, next.second))
-        setAlarm(next.first)
+        val (fireAt, schedule) = next
+        settings.setScheduledPending(pendingJson(fireAt, schedule))
+        setAlarm(fireAt)
+        armReminders(fireAt, schedule, now)
     }
+
+    private fun armReminders(fireAt: Long, schedule: FocusSchedule, now: Long) {
+        schedule.reminders.forEach { minutes ->
+            val at = fireAt - minutes * 60_000L
+            if (at <= now) return@forEach
+            val pi = reminderPendingIntent(minutes, schedule.title, fireAt)
+            val exact = Build.VERSION.SDK_INT < Build.VERSION_CODES.S || alarmManager.canScheduleExactAlarms()
+            if (exact) alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pi)
+            else alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pi)
+        }
+    }
+
+    private fun cancelReminders() {
+        REMINDER_OFFSETS.forEach { minutes ->
+            alarmManager.cancel(reminderPendingIntent(minutes, "", 0L))
+        }
+    }
+
+    private fun reminderPendingIntent(minutes: Int, title: String, fireAt: Long): PendingIntent =
+        PendingIntent.getBroadcast(
+            context, REMINDER_REQUEST_BASE + minutes,
+            Intent(context, ReminderReceiver::class.java)
+                .putExtra(EXTRA_MINUTES, minutes)
+                .putExtra(EXTRA_TITLE, title)
+                .putExtra(EXTRA_START_AT, fireAt),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
 
     /** After reboot / process death, re-arm from the persisted pending. */
     suspend fun rearmFromPending() {
@@ -65,6 +95,12 @@ class FocusScheduleScheduler @Inject constructor(
 
     companion object {
         private const val REQUEST_CODE = 7302
+        private const val REMINDER_REQUEST_BASE = 7400
+        /** Reminder offsets (minutes) the UI can toggle; also the set we cancel. */
+        val REMINDER_OFFSETS = listOf(60, 15, 5)
+        const val EXTRA_MINUTES = "minutes"
+        const val EXTRA_TITLE = "title"
+        const val EXTRA_START_AT = "startAt"
 
         fun pendingJson(fireAt: Long, s: FocusSchedule): String = JSONObject()
             .put("fireAt", fireAt)

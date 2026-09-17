@@ -67,6 +67,9 @@ class FocusSessionManager @Inject constructor(
             scheduler.scheduleEnd(active.endAt)
             notifier.postFocusCountdown(
                 title = if (config.strict) "Focus (strict) — stay on task" else "Focus session running",
+                body = "${config.cycles} × ${config.focusBlockMin}m focus" +
+                    (if (config.breakMin > 0) " · ${config.breakMin}m breaks" else "") +
+                    " · ${config.totalMinutes}m total",
                 endAt = active.endAt,
                 strict = config.strict
             )

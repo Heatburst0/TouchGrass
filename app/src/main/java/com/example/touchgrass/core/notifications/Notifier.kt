@@ -75,7 +75,7 @@ class Notifier @Inject constructor(
      * chronometer itself (no per-second updates from us). When [strict] the session
      * is a commitment: the notification is ongoing and non-dismissible.
      */
-    fun postFocusCountdown(title: String, endAt: Long, strict: Boolean) {
+    fun postFocusCountdown(title: String, body: String, endAt: Long, strict: Boolean) {
         if (!hasPermission()) return
         val tap = PendingIntent.getActivity(
             context, Ids.FOCUS_ONGOING,
@@ -85,6 +85,7 @@ class Notifier @Inject constructor(
         val notification = NotificationCompat.Builder(context, NotifChannel.GOALS.id)
             .setSmallIcon(R.mipmap.ic_launcher)
             .setContentTitle(title)
+            .setContentText(body)
             .setWhen(endAt)
             .setUsesChronometer(true)
             .setChronometerCountDown(true)
@@ -120,6 +121,7 @@ class Notifier @Inject constructor(
         const val ACCESSIBILITY_OFF = 1001
         const val FOCUS_ONGOING = 1002
         const val FOCUS_DONE = 1003
+        const val FOCUS_REMINDER = 1004
         fun commit(goalId: Long): Int = (2000L + goalId).toInt()
     }
 }
