@@ -161,6 +161,71 @@ impl Supabase {
             .send()?;
         json_ok(resp, "list schedules")
     }
+
+    fn get_one<T: for<'de> Deserialize<'de>>(&self, table: &str) -> Result<Option<T>> {
+        let resp = self
+            .http
+            .get(format!("{}/rest/v1/{}?select=*", self.url, table))
+            .header("apikey", &self.anon_key)
+            .header("Authorization", format!("Bearer {}", self.access()?))
+            .send()?;
+        let rows: Vec<T> = json_ok(resp, table)?;
+        Ok(rows.into_iter().next())
+    }
+
+    pub fn get_policy(&self) -> Result<Option<Policy>> {
+        self.get_one("focus_policy")
+    }
+
+    pub fn upsert_policy(&self, p: &Policy) -> Result<()> {
+        self.insert("focus_policy", &json!({
+            "allowed_apps": p.allowed_apps,
+            "blocked_apps": p.blocked_apps,
+            "force_quit_apps": p.force_quit_apps,
+            "blocked_sites": p.blocked_sites,
+        }))
+    }
+
+    pub fn get_active_session(&self) -> Result<Option<ActiveSession>> {
+        self.get_one("active_sessions")
+    }
+
+    pub fn set_active_session(&self, started_at: &str, device_id: &str, config: Value) -> Result<()> {
+        self.insert("active_sessions", &json!({
+            "active": true,
+            "started_at": started_at,
+            "origin_device_id": device_id,
+            "config": config,
+        }))
+    }
+
+    pub fn clear_active_session(&self) -> Result<()> {
+        self.insert("active_sessions", &json!({ "active": false }))
+    }
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct Policy {
+    #[serde(default)]
+    pub allowed_apps: Vec<String>,
+    #[serde(default)]
+    pub blocked_apps: Vec<String>,
+    #[serde(default)]
+    pub force_quit_apps: Vec<String>,
+    #[serde(default)]
+    pub blocked_sites: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ActiveSession {
+    #[serde(default)]
+    pub active: bool,
+    #[serde(default)]
+    pub started_at: Option<String>,
+    #[serde(default)]
+    pub origin_device_id: Option<String>,
+    #[serde(default)]
+    pub config: Value,
 }
 
 fn expect_ok(resp: reqwest::blocking::Response, what: &str) -> Result<()> {

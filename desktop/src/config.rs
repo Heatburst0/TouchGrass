@@ -19,6 +19,13 @@ pub struct Config {
     pub refresh_token: Option<String>,
     #[serde(default = "default_allowed_apps")]
     pub allowed_apps: Vec<String>,
+    // Local seed/fallback for the server-side focus_policy (phone-managed).
+    #[serde(default)]
+    pub blocked_apps: Vec<String>,
+    #[serde(default)]
+    pub force_quit_apps: Vec<String>,
+    #[serde(default)]
+    pub blocked_sites: Vec<String>,
 }
 
 fn default_allowed_apps() -> Vec<String> {

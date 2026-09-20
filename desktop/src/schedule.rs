@@ -1,79 +1,110 @@
 use crate::config::Config;
 use crate::focus::{run_session, SessionConfig};
-use crate::supabase::{RemoteSchedule, Supabase};
+use crate::supabase::{Policy, RemoteSchedule};
 use anyhow::Result;
 use chrono::{DateTime, Datelike, Duration as ChronoDuration, Local, NaiveTime, TimeZone, Weekday};
 use std::collections::HashSet;
 use std::thread::sleep;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+const POLL_SECS: u64 = 20;
 
 /// Poll DESKTOP schedules and auto-start sessions when due. Re-fetches (and
 /// re-auths) in ≤5-min chunks so edits are picked up and the token stays fresh.
 pub fn watch(cfg: &mut Config) -> Result<()> {
     let device_id = cfg.device_id_or_new()?;
     let name = gethostname::gethostname().to_string_lossy().to_string();
-    let allowed = cfg.allowed_apps.clone();
-    println!("Watching DESKTOP schedules as \"{name}\"… (Ctrl+C to stop)");
+    println!("Watching schedules + live sessions as \"{name}\"… (Ctrl+C to stop)");
+
+    let mut sb = crate::authed(cfg)?;
+    let _ = sb.upsert_device(&device_id, &name);
+    let mut last_auth = Instant::now();
+    let mut handled_live: Option<String> = None;
+
     loop {
-        // Refresh the access token each iteration (Supabase rotates refresh tokens).
-        let mut sb = Supabase::new(&cfg.supabase_url, &cfg.anon_key);
-        let rt = match cfg.refresh_token.clone() {
-            Some(rt) => rt,
-            None => {
-                eprintln!("not signed in — run `touchgrass-agent login`");
-                return Ok(());
+        // Access tokens expire (~1h); re-auth periodically.
+        if last_auth.elapsed() >= Duration::from_secs(25 * 60) {
+            match crate::authed(cfg) {
+                Ok(c) => {
+                    sb = c;
+                    last_auth = Instant::now();
+                    let _ = sb.upsert_device(&device_id, &name);
+                }
+                Err(e) => {
+                    eprintln!("re-auth failed: {e}");
+                    sleep(Duration::from_secs(60));
+                    continue;
+                }
             }
-        };
-        match sb.refresh(&rt) {
-            Ok(s) => {
-                cfg.refresh_token = Some(s.refresh_token);
-                let _ = cfg.save();
-                sb.set_access(s.access_token);
-            }
-            Err(e) => {
-                eprintln!("auth refresh failed: {e}");
-                sleep(Duration::from_secs(60));
+        }
+
+        let policy = crate::resolve_policy(&sb, cfg);
+
+        // 1) A live session started on another device (phone "sync to laptop").
+        if let Ok(Some(a)) = sb.get_active_session() {
+            if a.active
+                && a.started_at.is_some()
+                && a.started_at != handled_live
+                && a.origin_device_id.as_deref() != Some(device_id.as_str())
+            {
+                handled_live = a.started_at.clone();
+                println!("Joining a live focus session started on another device…");
+                let scfg = session_from_config(&a.config, &policy);
+                if let Err(e) = run_session(&sb, &device_id, &scfg) {
+                    eprintln!("live session failed: {e}");
+                }
                 continue;
             }
         }
-        let _ = sb.upsert_device(&device_id, &name);
 
-        let schedules = match sb.list_schedules() {
-            Ok(s) => s,
-            Err(e) => {
-                eprintln!("schedule fetch failed: {e}");
-                sleep(Duration::from_secs(60));
-                continue;
-            }
-        };
+        // 2) Scheduled DESKTOP sessions.
         let now = Local::now();
+        let schedules = sb.list_schedules().unwrap_or_default();
         let next = schedules
             .iter()
             .filter(|s| s.enabled && s.target_platforms.iter().any(|p| p.eq_ignore_ascii_case("DESKTOP")))
             .filter_map(|s| next_run(s, now).map(|t| (t, s)))
             .min_by_key(|(t, _)| *t);
 
-        match next {
-            None => sleep(Duration::from_secs(300)),
-            Some((at, sched)) => {
-                let wait = (at - now).num_seconds().max(0) as u64;
-                let title = if sched.title.is_empty() { "Focus" } else { &sched.title };
-                println!("Next: {} at {}", title, at.format("%a %H:%M"));
-                let chunk = wait.min(300);
-                sleep(Duration::from_secs(chunk));
-                if chunk >= wait {
-                    let scfg = SessionConfig {
-                        focus_min: sched.focus_block_min.max(1),
-                        break_min: sched.break_min.max(0),
-                        cycles: sched.cycles.max(1),
-                        allowed_apps: allowed.clone(),
-                    };
-                    if let Err(e) = run_session(&sb, &device_id, &scfg) {
-                        eprintln!("session failed: {e}");
-                    }
+        if let Some((at, sched)) = next {
+            let wait = (at - now).num_seconds().max(0) as u64;
+            if wait <= POLL_SECS {
+                let title = if sched.title.is_empty() { "Focus".to_string() } else { sched.title.clone() };
+                sleep(Duration::from_secs(wait));
+                println!("Starting scheduled \"{title}\"…");
+                let scfg = SessionConfig {
+                    focus_min: sched.focus_block_min.max(1),
+                    break_min: sched.break_min.max(0),
+                    cycles: sched.cycles.max(1),
+                    allowed_apps: policy.allowed_apps.clone(),
+                    blocked_apps: policy.blocked_apps.clone(),
+                    force_quit_apps: policy.force_quit_apps.clone(),
+                    blocked_sites: policy.blocked_sites.clone(),
+                    broadcast: false,
+                };
+                if let Err(e) = run_session(&sb, &device_id, &scfg) {
+                    eprintln!("session failed: {e}");
                 }
+                continue;
             }
         }
+
+        sleep(Duration::from_secs(POLL_SECS));
+    }
+}
+
+/// Build a session from the phone's active_sessions.config + this laptop's policy.
+fn session_from_config(config: &serde_json::Value, p: &Policy) -> SessionConfig {
+    let get = |k: &str, d: i64| config.get(k).and_then(|v| v.as_i64()).unwrap_or(d);
+    SessionConfig {
+        focus_min: get("focusBlockMin", 25).max(1),
+        break_min: get("breakMin", 5).max(0),
+        cycles: get("cycles", 1).max(1),
+        allowed_apps: p.allowed_apps.clone(),
+        blocked_apps: p.blocked_apps.clone(),
+        force_quit_apps: p.force_quit_apps.clone(),
+        blocked_sites: p.blocked_sites.clone(),
+        broadcast: false,
     }
 }
 

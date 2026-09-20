@@ -3,6 +3,8 @@ mod focus;
 mod schedule;
 mod supabase;
 mod tracker;
+mod enforce;
+mod hosts;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
@@ -38,6 +40,11 @@ enum Command {
 }
 
 fn main() -> Result<()> {
+    // Safety net: if the agent is Ctrl-C'd mid-session, undo any hosts-file block.
+    let _ = ctrlc::set_handler(|| {
+        hosts::clear();
+        std::process::exit(130);
+    });
     match Cli::parse().command {
         Command::Login => login(),
         Command::Focus { minutes, cycles, break_min } => focus_cmd(minutes, cycles, break_min),
@@ -47,7 +54,7 @@ fn main() -> Result<()> {
 }
 
 /// Refresh the access token from the stored refresh token, persisting the rotated one.
-fn authed(cfg: &mut Config) -> Result<Supabase> {
+pub(crate) fn authed(cfg: &mut Config) -> Result<Supabase> {
     let mut sb = Supabase::new(&cfg.supabase_url, &cfg.anon_key);
     let rt = cfg
         .refresh_token
@@ -99,13 +106,40 @@ fn focus_cmd(minutes: i64, cycles: i64, break_min: i64) -> Result<()> {
     let sb = authed(&mut cfg)?;
     let device_id = cfg.device_id_or_new()?;
     sb.upsert_device(&device_id, &hostname())?;
+    let p = resolve_policy(&sb, &cfg);
     let scfg = SessionConfig {
         focus_min: minutes.max(1),
         break_min: break_min.max(0),
         cycles: cycles.max(1),
-        allowed_apps: cfg.allowed_apps.clone(),
+        allowed_apps: p.allowed_apps,
+        blocked_apps: p.blocked_apps,
+        force_quit_apps: p.force_quit_apps,
+        blocked_sites: p.blocked_sites,
+        broadcast: false,
     };
     run_session(&sb, &device_id, &scfg)
+}
+
+/// The effective desktop rules: the server focus_policy if it has anything, else
+/// seed it from agent.toml (so the phone gets a starting point) and use that.
+pub(crate) fn resolve_policy(sb: &Supabase, cfg: &Config) -> supabase::Policy {
+    if let Ok(Some(p)) = sb.get_policy() {
+        if !p.allowed_apps.is_empty()
+            || !p.blocked_apps.is_empty()
+            || !p.force_quit_apps.is_empty()
+            || !p.blocked_sites.is_empty()
+        {
+            return p;
+        }
+    }
+    let seed = supabase::Policy {
+        allowed_apps: cfg.allowed_apps.clone(),
+        blocked_apps: cfg.blocked_apps.clone(),
+        force_quit_apps: cfg.force_quit_apps.clone(),
+        blocked_sites: cfg.blocked_sites.clone(),
+    };
+    let _ = sb.upsert_policy(&seed);
+    seed
 }
 
 fn run_cmd() -> Result<()> {

@@ -32,11 +32,12 @@ impl Tracker {
         moved || typed
     }
 
-    /// The active window's app name, lowercased; empty if it can't be read.
-    pub fn active_app(&self) -> String {
+    /// The active window's app name (lowercased) and its process id; ("", 0) if
+    /// it can't be read.
+    pub fn active_window(&self) -> (String, u64) {
         match get_active_window() {
-            Ok(w) => w.app_name.to_lowercase(),
-            Err(_) => String::new(),
+            Ok(w) => (w.app_name.to_lowercase(), w.process_id),
+            Err(_) => (String::new(), 0),
         }
     }
 }

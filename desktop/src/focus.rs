@@ -5,37 +5,44 @@ use chrono::Utc;
 use serde_json::json;
 use std::thread::sleep;
 use std::time::Duration;
+use crate::{enforce, hosts};
+use std::collections::HashMap;
 
 pub struct SessionConfig {
     pub focus_min: i64,
     pub break_min: i64,
     pub cycles: i64,
     pub allowed_apps: Vec<String>,
+    pub blocked_apps: Vec<String>,
+    pub force_quit_apps: Vec<String>,
+    pub blocked_sites: Vec<String>,
+    pub broadcast: bool, // upsert active_sessions so other devices start too
 }
+
 
 const SAMPLE_SECS: i64 = 5;
 
 /// Runs a focus session, measuring productive time (input activity while an allowed
 /// app is focused) and writing telemetry + a final session row to Supabase.
 pub fn run_session(sb: &Supabase, device_id: &str, cfg: &SessionConfig) -> Result<()> {
-    let allowed: Vec<String> = cfg
-        .allowed_apps
-        .iter()
-        .map(|a| a.to_lowercase())
-        .filter(|a| !a.is_empty())
-        .collect();
-    let mut tracker = Tracker::new();
-    let started = Utc::now();
-    let mut active_secs: i64 = 0;
-    let mut violations: i64 = 0;
+    let allowed:  Vec<String> = cfg.allowed_apps.iter().map(|s| s.to_lowercase()).collect();
+    let blocked:  Vec<String> = cfg.blocked_apps.iter().map(|s| s.to_lowercase()).collect();
+    let quit:     Vec<String> = cfg.force_quit_apps.iter().map(|s| s.to_lowercase()).collect();
 
-    println!(
-        "Focus started: {} × {}m focus, {}m breaks. Allowed: {}",
-        cfg.cycles,
-        cfg.focus_min,
-        cfg.break_min,
-        cfg.allowed_apps.join(", ")
-    );
+    hosts::clear();                          // remove any stale block first
+    if let Err(e) = hosts::apply(&cfg.blocked_sites) { eprintln!("site block: {e}"); }
+
+    let started = Utc::now();
+    if cfg.broadcast {
+        let _ = sb.set_active_session(&started.to_rfc3339(), device_id,
+            json!({ "focusBlockMin": cfg.focus_min, "breakMin": cfg.break_min, "cycles": cfg.cycles }));
+    }
+
+    let mut tracker = Tracker::new();
+    let mut active_secs = 0i64;
+    let mut violations = 0i64;
+    let mut by_app: HashMap<String, i64> = HashMap::new();      // productive seconds per app
+    let mut off_app: HashMap<String, i64> = HashMap::new(); 
 
     for cycle in 1..=cfg.cycles {
         println!("[cycle {}/{}] Focus {}m — stay in your allowed apps.", cycle, cfg.cycles, cfg.focus_min);
@@ -47,18 +54,20 @@ pub fn run_session(sb: &Supabase, device_id: &str, cfg: &SessionConfig) -> Resul
             sleep(Duration::from_secs(SAMPLE_SECS as u64));
             elapsed += SAMPLE_SECS;
             let active = tracker.sample_active();
-            let app = tracker.active_app();
+            let (app, pid) = tracker.active_window();
+            if quit.iter().any(|a| app.contains(a)) {
+                enforce::force_quit(pid);
+            } else if blocked.iter().any(|a| app.contains(a)) {
+                enforce::minimize_foreground();
+            }
             let on_task = allowed.iter().any(|a| app.contains(a));
+            if active { win_active += SAMPLE_SECS; } else { win_idle += SAMPLE_SECS; }
             if active && on_task {
                 active_secs += SAMPLE_SECS;
-                win_active += SAMPLE_SECS;
-            } else {
-                win_idle += SAMPLE_SECS;
-                if active && !on_task {
-                    violations += 1;
-                    let shown = if app.is_empty() { "unknown" } else { app.as_str() };
-                    println!("  off-task: {}", shown);
-                }
+                *by_app.entry(app.clone()).or_default() += SAMPLE_SECS;
+            } else if active {
+                violations += 1;
+                *off_app.entry(app.clone()).or_default() += SAMPLE_SECS;
             }
             if win_active + win_idle >= 60 {
                 let _ = sb.insert_device_event(&RemoteDeviceEvent {
@@ -78,6 +87,9 @@ pub fn run_session(sb: &Supabase, device_id: &str, cfg: &SessionConfig) -> Resul
         }
     }
 
+    hosts::clear();
+    if cfg.broadcast { let _ = sb.clear_active_session(); }
+
     let ended = Utc::now();
     let focused_min = active_secs / 60;
     let planned = cfg.cycles * cfg.focus_min;
@@ -94,7 +106,7 @@ pub fn run_session(sb: &Supabase, device_id: &str, cfg: &SessionConfig) -> Resul
         violations,
         strict: false,
         outcome: "COMPLETED".into(),
-        config: json!({ "allowed": cfg.allowed_apps }),
+        config: json!({ "allowed": cfg.allowed_apps, "apps": by_app, "offTask": off_app }),
     })?;
 
     println!(
