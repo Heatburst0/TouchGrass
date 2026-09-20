@@ -99,6 +99,18 @@ impl Supabase {
         json_ok(resp, "verify OTP")
     }
 
+    /// Verify using the token embedded in the default sign-in link (works without
+    /// a custom email template / SMTP).
+    pub fn verify_token_hash(&self, token_hash: &str) -> Result<Session> {
+        let resp = self
+            .http
+            .post(format!("{}/auth/v1/verify", self.url))
+            .header("apikey", &self.anon_key)
+            .json(&json!({ "type": "magiclink", "token_hash": token_hash }))
+            .send()?;
+        json_ok(resp, "verify link")
+    }
+
     pub fn refresh(&self, refresh_token: &str) -> Result<Session> {
         let resp = self
             .http

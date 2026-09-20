@@ -69,9 +69,17 @@ fn login() -> Result<()> {
     let sb = Supabase::new(&cfg.supabase_url, &cfg.anon_key);
     let email = prompt("Email: ")?;
     sb.send_otp(&email)?;
-    println!("Sent a 6-digit code to {email}. Check your email.");
-    let code = prompt("Code: ")?;
-    let session = sb.verify_otp(&email, code.trim())?;
+    println!("Sent a sign-in email to {email}.");
+    println!("Open it, copy the \"Sign in\" link, and paste it here.");
+    println!("(Or, if you set up SMTP and added a code to the template, paste the 6-digit code.)");
+    let input = prompt("> ")?;
+    let session = if input.contains("token") || input.contains("://") {
+        let token_hash =
+            extract_token(&input).context("couldn't find a token in that link — paste the full URL")?;
+        sb.verify_token_hash(&token_hash)?
+    } else {
+        sb.verify_otp(&email, input.trim())?
+    };
 
     cfg.email = Some(email);
     cfg.refresh_token = Some(session.refresh_token);
@@ -118,6 +126,21 @@ fn status_cmd() -> Result<()> {
     println!("Device id: {}", cfg.device_id.clone().unwrap_or_else(|| "(none yet)".into()));
     println!("Allowed apps: {}", cfg.allowed_apps.join(", "));
     Ok(())
+}
+
+/// Pull the verification token out of a pasted Supabase sign-in link.
+fn extract_token(link: &str) -> Option<String> {
+    for key in ["token_hash=", "token="] {
+        if let Some(i) = link.find(key) {
+            let rest = &link[i + key.len()..];
+            let end = rest.find('&').unwrap_or(rest.len());
+            let val = rest[..end].trim();
+            if !val.is_empty() {
+                return Some(val.to_string());
+            }
+        }
+    }
+    None
 }
 
 fn prompt(label: &str) -> Result<String> {

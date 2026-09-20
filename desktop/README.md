@@ -11,14 +11,14 @@ auto-start `DESKTOP`-targeted schedules you create on the phone.
 - **Rust** (stable): install from [rustup.rs](https://rustup.rs).
 - Your Supabase project (the same one the phone uses).
 
-## Supabase one-time tweak (for headless sign-in)
+## Sign-in
 
-The agent signs in with a **6-digit email code** (no browser). Supabase only puts
-that code in the email if the template references it:
+No Supabase changes needed. `login` sends you the normal sign-in email; you copy
+the **"Sign in" link** from it and paste it into the agent, which pulls the token
+out and completes sign-in headlessly.
 
-- Dashboard → **Authentication → Email Templates → Magic Link** → add a line:
-  `Your code: {{ .Token }}`
-- This is backward-compatible — the phone's magic *link* still works.
+(Optional: if you set up custom SMTP and add `Your code: {{ .Token }}` to the
+Magic Link email template, you can paste the 6-digit code instead of the link.)
 
 ## Build
 
