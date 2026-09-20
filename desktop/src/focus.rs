@@ -43,13 +43,11 @@ pub fn run_session(sb: &Supabase, device_id: &str, cfg: &SessionConfig) -> Resul
         let mut elapsed = 0i64;
         let mut win_active = 0i64;
         let mut win_idle = 0i64;
-        let mut last_app = String::new();
         while elapsed < block_secs {
             sleep(Duration::from_secs(SAMPLE_SECS as u64));
             elapsed += SAMPLE_SECS;
             let active = tracker.sample_active();
             let app = tracker.active_app();
-            last_app = app.clone();
             let on_task = allowed.iter().any(|a| app.contains(a));
             if active && on_task {
                 active_secs += SAMPLE_SECS;
@@ -58,7 +56,7 @@ pub fn run_session(sb: &Supabase, device_id: &str, cfg: &SessionConfig) -> Resul
                 win_idle += SAMPLE_SECS;
                 if active && !on_task {
                     violations += 1;
-                    let shown = if app.is_empty() { "unknown".to_string() } else { app };
+                    let shown = if app.is_empty() { "unknown" } else { app.as_str() };
                     println!("  off-task: {}", shown);
                 }
             }
@@ -68,7 +66,7 @@ pub fn run_session(sb: &Supabase, device_id: &str, cfg: &SessionConfig) -> Resul
                     session_id: None,
                     kind: "INPUT_ACTIVITY".into(),
                     occurred_at: Utc::now().to_rfc3339(),
-                    payload: json!({ "activeSeconds": win_active, "idleSeconds": win_idle, "app": last_app }),
+                    payload: json!({ "activeSeconds": win_active, "idleSeconds": win_idle, "app": app }),
                 });
                 win_active = 0;
                 win_idle = 0;

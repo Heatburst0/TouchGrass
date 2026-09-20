@@ -42,6 +42,7 @@ pub struct RemoteDeviceEvent {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)] // wire model: some columns are decoded but not all are read yet
 pub struct RemoteSchedule {
     pub id: String,
     #[serde(default)]
