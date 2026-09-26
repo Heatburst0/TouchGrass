@@ -17,11 +17,13 @@ pub struct SessionConfig {
     pub force_quit_apps: Vec<String>,
     pub blocked_sites: Vec<String>,
     pub block_sites: bool, // per-session gate: only null-route sites when the session asked for it
+    pub watch_remote_stop: bool, // abort if the shared active_sessions row is cleared (e.g. phone ended it)
     pub broadcast: bool, // upsert active_sessions so other devices start too
 }
 
 
 const SAMPLE_SECS: i64 = 5;
+const REMOTE_CHECK_SECS: i64 = 15; // how often to re-check the shared active_sessions row
 
 /// Runs a focus session, measuring productive time (input activity while an allowed
 /// app is focused) and writing telemetry + a final session row to Supabase.
@@ -48,8 +50,10 @@ pub fn run_session(sb: &Supabase, device_id: &str, cfg: &SessionConfig) -> Resul
     let mut by_app: HashMap<String, i64> = HashMap::new();      // productive seconds per app
     let mut off_app: HashMap<String, i64> = HashMap::new();
     let mut seen: HashSet<String> = HashSet::new();             // apps already reported this run
+    let mut outcome = "COMPLETED";
+    let mut remote_since = 0i64;                                 // secs since last active_sessions check
 
-    for cycle in 1..=cfg.cycles {
+    'session: for cycle in 1..=cfg.cycles {
         println!("[cycle {}/{}] Focus {}m — stay in your allowed apps.", cycle, cfg.cycles, cfg.focus_min);
         let block_secs = cfg.focus_min * 60;
         let mut elapsed = 0i64;
@@ -58,6 +62,20 @@ pub fn run_session(sb: &Supabase, device_id: &str, cfg: &SessionConfig) -> Resul
         while elapsed < block_secs {
             sleep(Duration::from_secs(SAMPLE_SECS as u64));
             elapsed += SAMPLE_SECS;
+            // Stop early if the session was ended from another device (e.g. the phone).
+            if cfg.watch_remote_stop {
+                remote_since += SAMPLE_SECS;
+                if remote_since >= REMOTE_CHECK_SECS {
+                    remote_since = 0;
+                    if let Ok(Some(a)) = sb.get_active_session() {
+                        if !a.active {
+                            println!("Focus session ended from another device — stopping.");
+                            outcome = "ENDED_EARLY";
+                            break 'session;
+                        }
+                    }
+                }
+            }
             let active = tracker.sample_active();
             let (app, pid) = tracker.active_window();
             if !app.is_empty() && seen.insert(app.clone()) {
@@ -113,7 +131,7 @@ pub fn run_session(sb: &Supabase, device_id: &str, cfg: &SessionConfig) -> Resul
         cycles: cfg.cycles,
         violations,
         strict: false,
-        outcome: "COMPLETED".into(),
+        outcome: outcome.into(),
         config: json!({ "allowed": cfg.allowed_apps, "apps": by_app, "offTask": off_app }),
     })?;
 

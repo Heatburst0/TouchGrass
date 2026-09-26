@@ -119,6 +119,7 @@ fn focus_cmd(minutes: i64, cycles: i64, break_min: i64, block_sites: bool) -> Re
         force_quit_apps: p.force_quit_apps,
         blocked_sites: p.blocked_sites,
         block_sites,
+        watch_remote_stop: false,
         broadcast: false,
     };
     run_session(&sb, &device_id, &scfg)

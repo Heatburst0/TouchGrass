@@ -90,6 +90,7 @@ pub fn watch(cfg: &mut Config) -> Result<()> {
                     force_quit_apps: policy.force_quit_apps.clone(),
                     blocked_sites: policy.blocked_sites.clone(),
                     block_sites: true, // scheduled desktop sessions enforce the policy's site list
+                    watch_remote_stop: false,
                     broadcast: false,
                 };
                 if let Err(e) = run_session(&sb, &device_id, &scfg) {
@@ -116,6 +117,7 @@ fn session_from_config(config: &serde_json::Value, p: &Policy) -> SessionConfig 
         force_quit_apps: p.force_quit_apps.clone(),
         blocked_sites: p.blocked_sites.clone(),
         block_sites,
+        watch_remote_stop: true, // phone owns this live session; stop when it clears active_sessions
         broadcast: false,
     }
 }
