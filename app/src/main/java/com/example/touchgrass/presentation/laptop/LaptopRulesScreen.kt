@@ -20,6 +20,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
@@ -50,6 +52,7 @@ import com.example.touchgrass.ui.theme.InkElevated
 import com.example.touchgrass.ui.theme.TextPrimary
 import com.example.touchgrass.ui.theme.TextSecondary
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
@@ -57,8 +60,13 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
-/** How a focus session treats a laptop app. Cycles in this order on tap. */
-enum class AppRole { IGNORE, TRACK, BLOCK, FORCE_QUIT }
+/** How a focus session treats a laptop app. */
+enum class AppRole(val label: String, val description: String) {
+    TRACK("Track", "Counts as focus time"),
+    BLOCK("Block", "Minimized when you open it during a focus block"),
+    FORCE_QUIT("Force-quit", "Closed on sight during focus"),
+    IGNORE("Ignore", "Not tracked — default")
+}
 
 /** A laptop app plus its current role, merged from discovery + saved policy. */
 data class LaptopApp(val name: String, val displayName: String, val role: AppRole)
@@ -70,13 +78,16 @@ class LaptopRulesViewModel @Inject constructor(
 ) : ViewModel() {
 
     val isConfigured: Boolean = policyRepo.isConfigured
-
     val policy = policyRepo.policy
 
-    /** Discovered apps unioned with any app already in a policy list, tagged with its role. */
+    // App names that have appeared this screen-session. Grows only, so an app set to
+    // Ignore (removed from every policy list) stays visible instead of vanishing.
+    private val knownNames = MutableStateFlow<Set<String>>(emptySet())
+
     val apps: StateFlow<List<LaptopApp>> =
-        combine(policyRepo.policy, deviceApps.apps) { policy, discovered ->
+        combine(policyRepo.policy, deviceApps.apps, knownNames) { policy, discovered, known ->
             val names = LinkedHashSet<String>()
+            names.addAll(known)
             discovered.forEach { names.add(it.name) }
             names.addAll(policy.allowedApps)
             names.addAll(policy.blockedApps)
@@ -94,28 +105,35 @@ class LaptopRulesViewModel @Inject constructor(
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     init {
-        if (isConfigured) viewModelScope.launch {
-            policyRepo.refresh()
-            deviceApps.refresh()
+        if (isConfigured) {
+            viewModelScope.launch {
+                policyRepo.refresh()
+                deviceApps.refresh()
+            }
+            // Accumulate every name we ever see so roles can change without rows disappearing.
+            viewModelScope.launch {
+                combine(policyRepo.policy, deviceApps.apps) { policy, discovered ->
+                    val s = LinkedHashSet<String>()
+                    discovered.forEach { s.add(it.name) }
+                    s.addAll(policy.allowedApps)
+                    s.addAll(policy.blockedApps)
+                    s.addAll(policy.forceQuitApps)
+                    s
+                }.collect { incoming -> knownNames.value = knownNames.value + incoming }
+            }
         }
     }
 
-    /** Advance an app to its next role and persist by rewriting the policy lists. */
-    fun cycleRole(app: LaptopApp) {
-        val next = when (app.role) {
-            AppRole.IGNORE -> AppRole.TRACK
-            AppRole.TRACK -> AppRole.BLOCK
-            AppRole.BLOCK -> AppRole.FORCE_QUIT
-            AppRole.FORCE_QUIT -> AppRole.IGNORE
-        }
+    /** Assign an explicit role by rewriting the policy lists (idempotent). */
+    fun setRole(name: String, role: AppRole) {
         val p = policyRepo.policy.value
-        val allowed = p.allowedApps - app.name
-        val blocked = p.blockedApps - app.name
-        val forceQuit = p.forceQuitApps - app.name
-        val updated = when (next) {
-            AppRole.TRACK -> p.copy(allowedApps = allowed + app.name, blockedApps = blocked, forceQuitApps = forceQuit)
-            AppRole.BLOCK -> p.copy(allowedApps = allowed, blockedApps = blocked + app.name, forceQuitApps = forceQuit)
-            AppRole.FORCE_QUIT -> p.copy(allowedApps = allowed, blockedApps = blocked, forceQuitApps = forceQuit + app.name)
+        val allowed = p.allowedApps - name
+        val blocked = p.blockedApps - name
+        val forceQuit = p.forceQuitApps - name
+        val updated = when (role) {
+            AppRole.TRACK -> p.copy(allowedApps = allowed + name, blockedApps = blocked, forceQuitApps = forceQuit)
+            AppRole.BLOCK -> p.copy(allowedApps = allowed, blockedApps = blocked + name, forceQuitApps = forceQuit)
+            AppRole.FORCE_QUIT -> p.copy(allowedApps = allowed, blockedApps = blocked, forceQuitApps = forceQuit + name)
             AppRole.IGNORE -> p.copy(allowedApps = allowed, blockedApps = blocked, forceQuitApps = forceQuit)
         }
         policyRepo.update(updated)
@@ -133,10 +151,19 @@ class LaptopRulesViewModel @Inject constructor(
     }
 }
 
+private fun roleColor(role: AppRole): Color = when (role) {
+    AppRole.TRACK -> GrassGreen
+    AppRole.BLOCK -> AmberWarn
+    AppRole.FORCE_QUIT -> DangerRed
+    AppRole.IGNORE -> TextSecondary
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LaptopRulesScreen(viewModel: LaptopRulesViewModel = hiltViewModel()) {
     val apps by viewModel.apps.collectAsState()
     val policy by viewModel.policy.collectAsState()
+    var sheetApp by remember { mutableStateOf<LaptopApp?>(null) }
 
     Column(
         modifier = Modifier
@@ -148,10 +175,7 @@ fun LaptopRulesScreen(viewModel: LaptopRulesViewModel = hiltViewModel()) {
     ) {
         Spacer(Modifier.height(8.dp))
         Text("Laptop focus rules", color = TextPrimary, fontSize = 24.sp, fontWeight = FontWeight.ExtraBold)
-        Text(
-            "Apps your laptop agent has seen. Tap the pill to set how focus sessions treat each one.",
-            color = TextSecondary, fontSize = 13.sp
-        )
+        Text("Choose how focus sessions treat each laptop app.", color = TextSecondary, fontSize = 13.sp)
 
         if (!viewModel.isConfigured) {
             RuleCard {
@@ -161,6 +185,8 @@ fun LaptopRulesScreen(viewModel: LaptopRulesViewModel = hiltViewModel()) {
             }
             return@Column
         }
+
+        LegendCard()
 
         Text("Discovered apps (${apps.size})", color = TextSecondary, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
 
@@ -176,26 +202,57 @@ fun LaptopRulesScreen(viewModel: LaptopRulesViewModel = hiltViewModel()) {
         } else {
             RuleCard {
                 apps.forEachIndexed { i, app ->
-                    if (i > 0) Spacer(Modifier.height(10.dp))
-                    AppRow(app) { viewModel.cycleRole(app) }
+                    if (i > 0) Spacer(Modifier.height(6.dp))
+                    AppRow(app) { sheetApp = app }
                 }
             }
-            RoleLegend()
         }
 
         Spacer(Modifier.height(8.dp))
-        SitesSection(
-            sites = policy.blockedSites,
-            onAdd = viewModel::addSite,
-            onRemove = viewModel::removeSite
-        )
+        SitesSection(sites = policy.blockedSites, onAdd = viewModel::addSite, onRemove = viewModel::removeSite)
         Spacer(Modifier.height(16.dp))
+    }
+
+    val current = sheetApp
+    if (current != null) {
+        ModalBottomSheet(onDismissRequest = { sheetApp = null }, containerColor = InkElevated) {
+            RoleSheet(
+                app = current,
+                onPick = { role ->
+                    viewModel.setRole(current.name, role)
+                    sheetApp = null
+                }
+            )
+        }
     }
 }
 
 @Composable
-private fun AppRow(app: LaptopApp, onCycle: () -> Unit) {
-    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+private fun LegendCard() {
+    RuleCard {
+        AppRole.entries.forEachIndexed { i, role ->
+            if (i > 0) Spacer(Modifier.height(8.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(10.dp).clip(CircleShape).background(roleColor(role)))
+                Spacer(Modifier.size(10.dp))
+                Text(role.label, color = TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.size(6.dp))
+                Text("— ${role.description}", color = TextSecondary, fontSize = 12.sp)
+            }
+        }
+    }
+}
+
+@Composable
+private fun AppRow(app: LaptopApp, onClick: () -> Unit) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .clickable { onClick() }
+            .padding(vertical = 8.dp)
+    ) {
         Box(
             modifier = Modifier
                 .size(36.dp)
@@ -204,46 +261,72 @@ private fun AppRow(app: LaptopApp, onCycle: () -> Unit) {
                 .border(1.dp, InkBorder, CircleShape),
             contentAlignment = Alignment.Center
         ) {
-            Text(
-                app.displayName.firstOrNull()?.uppercase() ?: "?",
-                color = TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.Bold
-            )
+            Text(app.displayName.firstOrNull()?.uppercase() ?: "?", color = TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.Bold)
         }
         Spacer(Modifier.size(12.dp))
         Text(app.displayName, color = TextPrimary, fontSize = 15.sp, modifier = Modifier.weight(1f))
         Spacer(Modifier.size(8.dp))
-        RolePill(app.role, onCycle)
+        RoleBadge(app.role)
+        Spacer(Modifier.size(6.dp))
+        Text("›", color = TextSecondary, fontSize = 18.sp)
     }
 }
 
 @Composable
-private fun RolePill(role: AppRole, onClick: () -> Unit) {
-    val (label, tint) = when (role) {
-        AppRole.TRACK -> "Track" to GrassGreen
-        AppRole.BLOCK -> "Block" to AmberWarn
-        AppRole.FORCE_QUIT -> "Force-quit" to DangerRed
-        AppRole.IGNORE -> "Ignore" to TextSecondary
-    }
+private fun RoleBadge(role: AppRole) {
+    val tint = roleColor(role)
     val bg = if (role == AppRole.IGNORE) Color.Transparent else tint.copy(alpha = 0.15f)
-    Box(
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
             .clip(RoundedCornerShape(50))
             .background(bg)
-            .border(1.dp, tint.copy(alpha = if (role == AppRole.IGNORE) 0.5f else 0.6f), RoundedCornerShape(50))
-            .clickable { onClick() }
-            .padding(horizontal = 14.dp, vertical = 7.dp)
+            .border(1.dp, tint.copy(alpha = 0.6f), RoundedCornerShape(50))
+            .padding(horizontal = 10.dp, vertical = 5.dp)
     ) {
-        Text(label, color = tint, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+        Box(Modifier.size(7.dp).clip(CircleShape).background(tint))
+        Spacer(Modifier.size(6.dp))
+        Text(role.label, color = tint, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
     }
 }
 
 @Composable
-private fun RoleLegend() {
-    Text(
-        "Track = counts as focus · Block = minimized during focus · Force-quit = closed on sight · Ignore = untracked",
-        color = TextSecondary, fontSize = 11.sp,
-        modifier = Modifier.padding(horizontal = 4.dp)
-    )
+private fun RoleSheet(app: LaptopApp, onPick: (AppRole) -> Unit) {
+    Column(Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, bottom = 28.dp)) {
+        Text("How should focus treat", color = TextSecondary, fontSize = 13.sp)
+        Text(app.displayName, color = TextPrimary, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(16.dp))
+        AppRole.entries.forEach { role ->
+            RoleOption(role = role, selected = role == app.role, onClick = { onPick(role) })
+            Spacer(Modifier.height(10.dp))
+        }
+    }
+}
+
+@Composable
+private fun RoleOption(role: AppRole, selected: Boolean, onClick: () -> Unit) {
+    val tint = roleColor(role)
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(if (selected) tint.copy(alpha = 0.12f) else Ink)
+            .border(1.dp, if (selected) tint.copy(alpha = 0.6f) else InkBorder, RoundedCornerShape(14.dp))
+            .clickable { onClick() }
+            .padding(horizontal = 16.dp, vertical = 14.dp)
+    ) {
+        Box(Modifier.size(12.dp).clip(CircleShape).background(tint))
+        Spacer(Modifier.size(14.dp))
+        Column(Modifier.weight(1f)) {
+            Text(role.label, color = TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+            Text(role.description, color = TextSecondary, fontSize = 12.sp)
+        }
+        if (selected) {
+            Spacer(Modifier.size(8.dp))
+            Text("✓", color = tint, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+        }
+    }
 }
 
 @OptIn(ExperimentalLayoutApi::class)
