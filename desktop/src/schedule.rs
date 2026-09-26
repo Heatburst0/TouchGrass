@@ -80,6 +80,7 @@ pub fn watch(cfg: &mut Config) -> Result<()> {
                     blocked_apps: policy.blocked_apps.clone(),
                     force_quit_apps: policy.force_quit_apps.clone(),
                     blocked_sites: policy.blocked_sites.clone(),
+                    block_sites: true, // scheduled desktop sessions enforce the policy's site list
                     broadcast: false,
                 };
                 if let Err(e) = run_session(&sb, &device_id, &scfg) {
@@ -96,6 +97,7 @@ pub fn watch(cfg: &mut Config) -> Result<()> {
 /// Build a session from the phone's active_sessions.config + this laptop's policy.
 fn session_from_config(config: &serde_json::Value, p: &Policy) -> SessionConfig {
     let get = |k: &str, d: i64| config.get(k).and_then(|v| v.as_i64()).unwrap_or(d);
+    let block_sites = config.get("blockSites").and_then(|v| v.as_bool()).unwrap_or(false);
     SessionConfig {
         focus_min: get("focusBlockMin", 25).max(1),
         break_min: get("breakMin", 5).max(0),
@@ -104,6 +106,7 @@ fn session_from_config(config: &serde_json::Value, p: &Policy) -> SessionConfig 
         blocked_apps: p.blocked_apps.clone(),
         force_quit_apps: p.force_quit_apps.clone(),
         blocked_sites: p.blocked_sites.clone(),
+        block_sites,
         broadcast: false,
     }
 }

@@ -97,7 +97,12 @@ class FocusViewModel @Inject constructor(
     val stats = manager.stats
     val rememberedBlocked = settings.focusBlockedPackages
     val schedules = scheduleRepo.schedules
+    val syncToLaptop = settings.syncFocusToLaptop
+    val blockSitesOnLaptop = settings.blockSitesOnLaptop
     val violations: Int get() = manager.violations
+
+    fun setSyncToLaptop(v: Boolean) { viewModelScope.launch { settings.setSyncFocusToLaptop(v) } }
+    fun setBlockSites(v: Boolean) { viewModelScope.launch { settings.setBlockSitesOnLaptop(v) } }
 
     val apps = MutableStateFlow<List<AppInfo>>(emptyList())
 
@@ -105,7 +110,8 @@ class FocusViewModel @Inject constructor(
         viewModelScope.launch { apps.value = installedApps.launchable() }
     }
 
-    fun start(config: FocusConfig) = manager.start(config)
+    fun start(config: FocusConfig, syncToLaptop: Boolean, blockSites: Boolean) =
+        manager.start(config, syncToLaptop, blockSites)
     fun endEarly() = manager.endEarly()
     fun clearToIdle() = manager.clearToIdle()
     fun settleIfComplete() = manager.settleIfComplete()
@@ -123,8 +129,13 @@ class FocusViewModel @Inject constructor(
 }
 
 @Composable
-fun FocusScreen(viewModel: FocusViewModel = hiltViewModel()) {
+fun FocusScreen(
+    onOpenLaptopRules: () -> Unit = {},
+    viewModel: FocusViewModel = hiltViewModel()
+) {
     val active by viewModel.activeSession.collectAsState()
+    val syncToLaptop by viewModel.syncToLaptop.collectAsState(initial = false)
+    val blockSites by viewModel.blockSitesOnLaptop.collectAsState(initial = false)
     val stats by viewModel.stats.collectAsState(initial = FocusStats(0, 0, 0))
     val sessions by viewModel.recentSessions.collectAsState(initial = emptyList())
     val remembered by viewModel.rememberedBlocked.collectAsState(initial = emptySet())
@@ -190,7 +201,12 @@ fun FocusScreen(viewModel: FocusViewModel = hiltViewModel()) {
                 apps = apps,
                 remembered = remembered,
                 labelOf = viewModel::label,
-                onStart = { viewModel.start(it) },
+                syncToLaptop = syncToLaptop,
+                blockSites = blockSites,
+                onSetSyncToLaptop = viewModel::setSyncToLaptop,
+                onSetBlockSites = viewModel::setBlockSites,
+                onOpenLaptopRules = onOpenLaptopRules,
+                onStart = { cfg, sync, block -> viewModel.start(cfg, sync, block) },
                 onSaveBlocked = { viewModel.saveBlocked(it) }
             )
             is FocusPhase.Focusing -> RunningCard(
@@ -234,7 +250,12 @@ private fun SetupCard(
     apps: List<AppInfo>,
     remembered: Set<String>,
     labelOf: (String) -> String,
-    onStart: (FocusConfig) -> Unit,
+    syncToLaptop: Boolean,
+    blockSites: Boolean,
+    onSetSyncToLaptop: (Boolean) -> Unit,
+    onSetBlockSites: (Boolean) -> Unit,
+    onOpenLaptopRules: () -> Unit,
+    onStart: (FocusConfig, Boolean, Boolean) -> Unit,
     onSaveBlocked: (Set<String>) -> Unit
 ) {
     var focus by remember { mutableIntStateOf(25) }
@@ -242,6 +263,8 @@ private fun SetupCard(
     var cycles by remember { mutableIntStateOf(4) }
     var strict by remember { mutableStateOf(false) }
     var pickerOpen by remember { mutableStateOf(false) }
+    var sync by remember(syncToLaptop) { mutableStateOf(syncToLaptop) }
+    var blockSitesOn by remember(blockSites) { mutableStateOf(blockSites) }
 
     // Selected blocklist: remembered choice, else the default watched-apps seed.
     var selected by remember(remembered) {
@@ -315,6 +338,63 @@ private fun SetupCard(
             )
         }
 
+        Spacer(Modifier.height(16.dp))
+        // ---- Laptop (cross-device) ----
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("Sync to laptop", color = TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                Text(
+                    "Also start this session on your laptop agent.",
+                    color = TextSecondary, fontSize = 11.sp
+                )
+            }
+            Spacer(Modifier.size(12.dp))
+            Switch(
+                checked = sync,
+                onCheckedChange = { sync = it; onSetSyncToLaptop(it) },
+                colors = SwitchDefaults.colors(checkedThumbColor = Ink, checkedTrackColor = GrassGreen, uncheckedTrackColor = InkBorder)
+            )
+        }
+        if (sync) {
+            Spacer(Modifier.height(12.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("Block sites on laptop", color = TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        "Null-route your blocked sites (e.g. YouTube) during this session.",
+                        color = TextSecondary, fontSize = 11.sp
+                    )
+                }
+                Spacer(Modifier.size(12.dp))
+                Switch(
+                    checked = blockSitesOn,
+                    onCheckedChange = { blockSitesOn = it; onSetBlockSites(it) },
+                    colors = SwitchDefaults.colors(checkedThumbColor = Ink, checkedTrackColor = GrassGreen, uncheckedTrackColor = InkBorder)
+                )
+            }
+            Spacer(Modifier.height(10.dp))
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .clickable { onOpenLaptopRules() }
+                    .padding(vertical = 6.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("Laptop rules", color = TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                Text("apps & sites  ›", color = GrassGreen, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+            }
+        }
+
         Spacer(Modifier.height(14.dp))
         Text("Total $totalMin min  ·  ${selected.size} apps blocked", color = AmberWarn, fontSize = 12.sp)
         Spacer(Modifier.height(16.dp))
@@ -327,7 +407,9 @@ private fun SetupCard(
                         cycles = cycles,
                         blockedPackages = selected,
                         strict = strict
-                    )
+                    ),
+                    sync,
+                    blockSitesOn
                 )
             },
             enabled = selected.isNotEmpty(),

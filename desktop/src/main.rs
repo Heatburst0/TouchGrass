@@ -32,6 +32,9 @@ enum Command {
         cycles: i64,
         #[arg(long = "break", default_value_t = 5)]
         break_min: i64,
+        /// Null-route your policy's blocked sites for the session (needs admin).
+        #[arg(long = "block-sites", default_value_t = false)]
+        block_sites: bool,
     },
     /// Watch DESKTOP schedules and auto-start sessions.
     Run,
@@ -47,7 +50,7 @@ fn main() -> Result<()> {
     });
     match Cli::parse().command {
         Command::Login => login(),
-        Command::Focus { minutes, cycles, break_min } => focus_cmd(minutes, cycles, break_min),
+        Command::Focus { minutes, cycles, break_min, block_sites } => focus_cmd(minutes, cycles, break_min, block_sites),
         Command::Run => run_cmd(),
         Command::Status => status_cmd(),
     }
@@ -101,7 +104,7 @@ fn login() -> Result<()> {
     Ok(())
 }
 
-fn focus_cmd(minutes: i64, cycles: i64, break_min: i64) -> Result<()> {
+fn focus_cmd(minutes: i64, cycles: i64, break_min: i64, block_sites: bool) -> Result<()> {
     let mut cfg = Config::load()?;
     let sb = authed(&mut cfg)?;
     let device_id = cfg.device_id_or_new()?;
@@ -115,6 +118,7 @@ fn focus_cmd(minutes: i64, cycles: i64, break_min: i64) -> Result<()> {
         blocked_apps: p.blocked_apps,
         force_quit_apps: p.force_quit_apps,
         blocked_sites: p.blocked_sites,
+        block_sites,
         broadcast: false,
     };
     run_session(&sb, &device_id, &scfg)

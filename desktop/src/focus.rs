@@ -16,6 +16,7 @@ pub struct SessionConfig {
     pub blocked_apps: Vec<String>,
     pub force_quit_apps: Vec<String>,
     pub blocked_sites: Vec<String>,
+    pub block_sites: bool, // per-session gate: only null-route sites when the session asked for it
     pub broadcast: bool, // upsert active_sessions so other devices start too
 }
 
@@ -30,12 +31,15 @@ pub fn run_session(sb: &Supabase, device_id: &str, cfg: &SessionConfig) -> Resul
     let quit:     Vec<String> = cfg.force_quit_apps.iter().map(|s| s.to_lowercase()).collect();
 
     hosts::clear();                          // remove any stale block first
-    if let Err(e) = hosts::apply(&cfg.blocked_sites) { eprintln!("site block: {e}"); }
+    let sites_blocked = cfg.block_sites && !cfg.blocked_sites.is_empty();
+    if sites_blocked {
+        if let Err(e) = hosts::apply(&cfg.blocked_sites) { eprintln!("site block: {e}"); }
+    }
 
     let started = Utc::now();
     if cfg.broadcast {
         let _ = sb.set_active_session(&started.to_rfc3339(), device_id,
-            json!({ "focusBlockMin": cfg.focus_min, "breakMin": cfg.break_min, "cycles": cfg.cycles }));
+            json!({ "focusBlockMin": cfg.focus_min, "breakMin": cfg.break_min, "cycles": cfg.cycles, "blockSites": cfg.block_sites }));
     }
 
     let mut tracker = Tracker::new();

@@ -33,6 +33,7 @@ import com.example.touchgrass.presentation.account.AccountScreen
 import com.example.touchgrass.presentation.dashboard.DoomscrollDashboard
 import com.example.touchgrass.features.focus.ui.FocusScreen
 import com.example.touchgrass.presentation.goals.GoalsScreen
+import com.example.touchgrass.presentation.laptop.LaptopRulesScreen
 import com.example.touchgrass.presentation.tools.ToolsHubScreen
 import com.example.touchgrass.ui.theme.GrassGreen
 import com.example.touchgrass.ui.theme.Ink
@@ -46,6 +47,7 @@ object Routes {
     const val FOCUS = "focus"
     const val TOOLS = "tools"
     const val ACCOUNT = "account"
+    const val LAPTOP_RULES = "laptop_rules"
     const val LIBRARY = "library"
     const val READER = "reader/{bookId}"
     const val QUIZ = "quiz/{bookId}"
@@ -119,7 +121,10 @@ fun TouchGrassAppRoot(startRoute: String? = null) {
                 GoalsScreen()
             }
             composable(Routes.FOCUS) {
-                FocusScreen()
+                FocusScreen(onOpenLaptopRules = { navController.navigate(Routes.LAPTOP_RULES) })
+            }
+            composable(Routes.LAPTOP_RULES) {
+                LaptopRulesScreen()
             }
             composable(Routes.TOOLS) {
                 ToolsHubScreen(onOpenRoute = { navController.navigate(it) })

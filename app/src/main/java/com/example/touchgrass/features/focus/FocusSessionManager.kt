@@ -7,6 +7,7 @@ import com.example.touchgrass.core.goals.GoalOrchestrator
 import com.example.touchgrass.core.goals.GoalType
 import com.example.touchgrass.core.notifications.NotifChannel
 import com.example.touchgrass.core.notifications.Notifier
+import com.example.touchgrass.core.remote.ActiveSessionRepository
 import com.example.touchgrass.di.ApplicationScope
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.SharingStarted
@@ -37,6 +38,7 @@ class FocusSessionManager @Inject constructor(
     private val scheduler: FocusScheduler,
     private val notifier: Notifier,
     private val orchestrator: GoalOrchestrator,
+    private val activeSessions: ActiveSessionRepository,
     @ApplicationScope private val scope: CoroutineScope
 ) {
     @Volatile
@@ -59,8 +61,11 @@ class FocusSessionManager @Inject constructor(
     var violations = 0
         private set
 
-    fun start(config: FocusConfig) {
+    fun start(config: FocusConfig, syncToLaptop: Boolean = false, blockSites: Boolean = false) {
         violations = 0
+        if (syncToLaptop) {
+            activeSessions.broadcast(config.focusBlockMin, config.breakMin, config.cycles, blockSites)
+        }
         scope.launch {
             val active = ActiveFocus(System.currentTimeMillis(), config)
             settings.setActiveFocusJson(active.toJson())
@@ -92,6 +97,7 @@ class FocusSessionManager @Inject constructor(
         scope.launch {
             scheduler.cancel()
             notifier.cancel(Notifier.Ids.FOCUS_ONGOING)
+            activeSessions.clear()
             settings.setActiveFocusJson("")
         }
     }
@@ -138,6 +144,7 @@ class FocusSessionManager @Inject constructor(
         }
         notifier.cancel(Notifier.Ids.FOCUS_ONGOING)
         scheduler.cancel()
+        activeSessions.clear()
         if (clear) settings.setActiveFocusJson("")
     }
 

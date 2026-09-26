@@ -53,6 +53,8 @@ class SettingsRepository @Inject constructor(
         val DEVICE_ID = stringPreferencesKey("device_id")
         val SCHEDULE_CACHE = stringPreferencesKey("focus_schedule_cache")
         val SCHEDULED_PENDING = stringPreferencesKey("focus_scheduled_pending")
+        val SYNC_FOCUS_TO_LAPTOP = booleanPreferencesKey("sync_focus_to_laptop")
+        val BLOCK_SITES_ON_LAPTOP = booleanPreferencesKey("block_sites_on_laptop")
     }
 
     val shortsLimit: Flow<Int> = context.dataStore.data
@@ -183,6 +185,22 @@ class SettingsRepository @Inject constructor(
 
     suspend fun setFocusBlockedPackages(packages: Set<String>) {
         context.dataStore.edit { it[Keys.FOCUS_BLOCKED_PACKAGES] = packages.joinToString(",") }
+    }
+
+    // ---- Cross-device focus (sync a manual session to the laptop) ----
+
+    val syncFocusToLaptop: Flow<Boolean> = context.dataStore.data
+        .map { it[Keys.SYNC_FOCUS_TO_LAPTOP] ?: false }
+
+    suspend fun setSyncFocusToLaptop(enabled: Boolean) {
+        context.dataStore.edit { it[Keys.SYNC_FOCUS_TO_LAPTOP] = enabled }
+    }
+
+    val blockSitesOnLaptop: Flow<Boolean> = context.dataStore.data
+        .map { it[Keys.BLOCK_SITES_ON_LAPTOP] ?: false }
+
+    suspend fun setBlockSitesOnLaptop(enabled: Boolean) {
+        context.dataStore.edit { it[Keys.BLOCK_SITES_ON_LAPTOP] = enabled }
     }
 
     // ---- Focus schedules (recurring sessions) ----
