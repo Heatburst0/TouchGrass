@@ -19,6 +19,12 @@ if (-not (Test-Path $vbs)) {
     exit 1
 }
 
+# Stop any previous instance (e.g. an older visible-window one) so re-running is clean.
+Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue | ForEach-Object {
+    try { Stop-ScheduledTask -TaskName $taskName -ErrorAction Stop } catch {}
+}
+Get-Process touchgrass-agent -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+
 # Launch through wscript so the agent runs with NO visible window (nothing to close).
 $action    = New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\wscript.exe" -Argument "`"$vbs`""
 $trigger   = New-ScheduledTaskTrigger -AtLogOn
