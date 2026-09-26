@@ -6,7 +6,7 @@ use serde_json::json;
 use std::thread::sleep;
 use std::time::Duration;
 use crate::{enforce, hosts};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 pub struct SessionConfig {
     pub focus_min: i64,
@@ -46,7 +46,8 @@ pub fn run_session(sb: &Supabase, device_id: &str, cfg: &SessionConfig) -> Resul
     let mut active_secs = 0i64;
     let mut violations = 0i64;
     let mut by_app: HashMap<String, i64> = HashMap::new();      // productive seconds per app
-    let mut off_app: HashMap<String, i64> = HashMap::new(); 
+    let mut off_app: HashMap<String, i64> = HashMap::new();
+    let mut seen: HashSet<String> = HashSet::new();             // apps already reported this run
 
     for cycle in 1..=cfg.cycles {
         println!("[cycle {}/{}] Focus {}m — stay in your allowed apps.", cycle, cfg.cycles, cfg.focus_min);
@@ -59,6 +60,9 @@ pub fn run_session(sb: &Supabase, device_id: &str, cfg: &SessionConfig) -> Resul
             elapsed += SAMPLE_SECS;
             let active = tracker.sample_active();
             let (app, pid) = tracker.active_window();
+            if !app.is_empty() && seen.insert(app.clone()) {
+                let _ = sb.upsert_device_app(device_id, &app, &app);
+            }
             if quit.iter().any(|a| app.contains(a)) {
                 enforce::force_quit(pid);
             } else if blocked.iter().any(|a| app.contains(a)) {

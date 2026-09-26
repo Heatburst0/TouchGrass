@@ -144,6 +144,17 @@ impl Supabase {
         self.insert("devices", &json!({ "id": id, "platform": "DESKTOP", "name": name }))
     }
 
+    /// Report an app seen in the foreground so the phone can offer it in the rules
+    /// picker. `app_name` is the lowercased match key; `display_name` is for the UI.
+    pub fn upsert_device_app(&self, device_id: &str, app_name: &str, display_name: &str) -> Result<()> {
+        self.insert("device_apps", &json!({
+            "device_id": device_id,
+            "app_name": app_name,
+            "display_name": display_name,
+            "last_seen": chrono::Utc::now().to_rfc3339(),
+        }))
+    }
+
     pub fn insert_focus_session(&self, s: &RemoteFocusSession) -> Result<()> {
         self.insert("focus_sessions", s)
     }

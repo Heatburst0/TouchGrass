@@ -20,6 +20,8 @@ pub fn watch(cfg: &mut Config) -> Result<()> {
     let _ = sb.upsert_device(&device_id, &name);
     let mut last_auth = Instant::now();
     let mut handled_live: Option<String> = None;
+    let tracker = crate::tracker::Tracker::new();
+    let mut seen_apps: HashSet<String> = HashSet::new();
 
     loop {
         // Access tokens expire (~1h); re-auth periodically.
@@ -39,6 +41,13 @@ pub fn watch(cfg: &mut Config) -> Result<()> {
         }
 
         let policy = crate::resolve_policy(&sb, cfg);
+
+        // Passively discover foreground apps so the phone's rules picker fills in
+        // even before any session runs.
+        let (fg_app, _) = tracker.active_window();
+        if !fg_app.is_empty() && seen_apps.insert(fg_app.clone()) {
+            let _ = sb.upsert_device_app(&device_id, &fg_app, &fg_app);
+        }
 
         // 1) A live session started on another device (phone "sync to laptop").
         if let Ok(Some(a)) = sb.get_active_session() {
