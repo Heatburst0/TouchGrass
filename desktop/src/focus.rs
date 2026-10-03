@@ -1,12 +1,12 @@
 use crate::supabase::{RemoteDeviceEvent, RemoteFocusSession, Supabase};
 use crate::tracker::Tracker;
+use crate::{enforce, hosts, notify};
 use anyhow::Result;
 use chrono::Utc;
 use serde_json::json;
+use std::collections::{HashMap, HashSet};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
-use crate::{enforce, hosts, notify};
-use std::collections::{HashMap, HashSet};
 
 pub struct SessionConfig {
     pub focus_min: i64,
@@ -18,13 +18,21 @@ pub struct SessionConfig {
     pub blocked_sites: Vec<String>,
     pub block_sites: bool, // per-session gate: only null-route sites when the session asked for it
     pub watch_remote_stop: bool, // abort if the shared active_sessions row is cleared (e.g. phone ended it)
-    pub broadcast: bool, // upsert active_sessions so other devices start too
+    pub broadcast: bool,         // upsert active_sessions so other devices start too
 }
-
 
 const SAMPLE_SECS: i64 = 5;
 const REMOTE_CHECK_SECS: i64 = 15; // how often to re-check the shared active_sessions row
 const BLOCK_TOAST_COOLDOWN_SECS: u64 = 60; // don't re-toast the same blocked app more often than this
+
+/// Clears the hosts-file site block when dropped, so an early return or a panic
+/// in a session never leaves sites null-routed.
+struct HostsGuard;
+impl Drop for HostsGuard {
+    fn drop(&mut self) {
+        hosts::clear();
+    }
+}
 
 /// Toast that an app was blocked, at most once per app per cooldown (avoids spam
 /// while a blocked app stays in the foreground).
@@ -32,7 +40,7 @@ fn block_toast(last: &mut HashMap<String, Instant>, app: &str, action: &str) {
     let now = Instant::now();
     let fire = last
         .get(app)
-        .map_or(true, |t| now.duration_since(*t).as_secs() >= BLOCK_TOAST_COOLDOWN_SECS);
+        .is_none_or(|t| now.duration_since(*t).as_secs() >= BLOCK_TOAST_COOLDOWN_SECS);
     if fire {
         last.insert(app.to_string(), now);
         notify::toast("Focus guard", &format!("{action}: {app}"));
@@ -42,14 +50,21 @@ fn block_toast(last: &mut HashMap<String, Instant>, app: &str, action: &str) {
 /// Runs a focus session, measuring productive time (input activity while an allowed
 /// app is focused) and writing telemetry + a final session row to Supabase.
 pub fn run_session(sb: &Supabase, device_id: &str, cfg: &SessionConfig) -> Result<()> {
-    let allowed:  Vec<String> = cfg.allowed_apps.iter().map(|s| s.to_lowercase()).collect();
-    let blocked:  Vec<String> = cfg.blocked_apps.iter().map(|s| s.to_lowercase()).collect();
-    let quit:     Vec<String> = cfg.force_quit_apps.iter().map(|s| s.to_lowercase()).collect();
+    let allowed: Vec<String> = cfg.allowed_apps.iter().map(|s| s.to_lowercase()).collect();
+    let blocked: Vec<String> = cfg.blocked_apps.iter().map(|s| s.to_lowercase()).collect();
+    let quit: Vec<String> = cfg
+        .force_quit_apps
+        .iter()
+        .map(|s| s.to_lowercase())
+        .collect();
 
-    hosts::clear();                          // remove any stale block first
+    hosts::clear(); // remove any stale block first
+    let _hosts_guard = HostsGuard; // clears the block on any exit (incl. panic)
     let sites_blocked = cfg.block_sites && !cfg.blocked_sites.is_empty();
     if sites_blocked {
-        if let Err(e) = hosts::apply(&cfg.blocked_sites) { eprintln!("site block: {e}"); }
+        if let Err(e) = hosts::apply(&cfg.blocked_sites) {
+            eprintln!("site block: {e}");
+        }
     }
 
     let started = Utc::now();
@@ -64,8 +79,16 @@ pub fn run_session(sb: &Supabase, device_id: &str, cfg: &SessionConfig) -> Resul
             "{}×{}m focus{}{}",
             cfg.cycles,
             cfg.focus_min,
-            if cfg.break_min > 0 { format!(" · {}m breaks", cfg.break_min) } else { String::new() },
-            if sites_blocked { " · sites blocked" } else { "" }
+            if cfg.break_min > 0 {
+                format!(" · {}m breaks", cfg.break_min)
+            } else {
+                String::new()
+            },
+            if sites_blocked {
+                " · sites blocked"
+            } else {
+                ""
+            }
         ),
     );
     let mut last_block_toast: HashMap<String, Instant> = HashMap::new();
@@ -73,14 +96,17 @@ pub fn run_session(sb: &Supabase, device_id: &str, cfg: &SessionConfig) -> Resul
     let mut tracker = Tracker::new();
     let mut active_secs = 0i64;
     let mut violations = 0i64;
-    let mut by_app: HashMap<String, i64> = HashMap::new();      // productive seconds per app
+    let mut by_app: HashMap<String, i64> = HashMap::new(); // productive seconds per app
     let mut off_app: HashMap<String, i64> = HashMap::new();
-    let mut seen: HashSet<String> = HashSet::new();             // apps already reported this run
+    let mut seen: HashSet<String> = HashSet::new(); // apps already reported this run
     let mut outcome = "COMPLETED";
-    let mut remote_since = 0i64;                                 // secs since last active_sessions check
+    let mut remote_since = 0i64; // secs since last active_sessions check
 
     'session: for cycle in 1..=cfg.cycles {
-        println!("[cycle {}/{}] Focus {}m — stay in your allowed apps.", cycle, cfg.cycles, cfg.focus_min);
+        println!(
+            "[cycle {}/{}] Focus {}m — stay in your allowed apps.",
+            cycle, cfg.cycles, cfg.focus_min
+        );
         notify::toast(
             &format!("Focus · cycle {}/{}", cycle, cfg.cycles),
             &format!("{}m of focus — stay on task.", cfg.focus_min),
@@ -119,7 +145,11 @@ pub fn run_session(sb: &Supabase, device_id: &str, cfg: &SessionConfig) -> Resul
                 block_toast(&mut last_block_toast, &app, "Minimized");
             }
             let on_task = allowed.iter().any(|a| app.contains(a));
-            if active { win_active += SAMPLE_SECS; } else { win_idle += SAMPLE_SECS; }
+            if active {
+                win_active += SAMPLE_SECS;
+            } else {
+                win_idle += SAMPLE_SECS;
+            }
             if active && on_task {
                 active_secs += SAMPLE_SECS;
                 *by_app.entry(app.clone()).or_default() += SAMPLE_SECS;
@@ -146,7 +176,9 @@ pub fn run_session(sb: &Supabase, device_id: &str, cfg: &SessionConfig) -> Resul
     }
 
     hosts::clear();
-    if cfg.broadcast { let _ = sb.clear_active_session(); }
+    if cfg.broadcast {
+        let _ = sb.clear_active_session();
+    }
 
     let ended = Utc::now();
     let focused_min = active_secs / 60;
@@ -169,7 +201,11 @@ pub fn run_session(sb: &Supabase, device_id: &str, cfg: &SessionConfig) -> Resul
 
     let off_task_min = off_app.values().sum::<i64>() / 60;
     notify::toast(
-        if outcome == "COMPLETED" { "Focus session complete" } else { "Focus session ended" },
+        if outcome == "COMPLETED" {
+            "Focus session complete"
+        } else {
+            "Focus session ended"
+        },
         &format!("{focused_min} min productive · {off_task_min} min off-task"),
     );
 

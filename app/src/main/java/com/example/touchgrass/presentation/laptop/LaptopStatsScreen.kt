@@ -1,5 +1,6 @@
 package com.example.touchgrass.presentation.laptop
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -22,7 +23,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -47,6 +48,7 @@ import com.example.touchgrass.ui.theme.TextSecondary
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.launch
 import java.time.OffsetDateTime
+import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 import javax.inject.Inject
@@ -68,11 +70,13 @@ class LaptopStatsViewModel @Inject constructor(
 @Composable
 fun LaptopStatsScreen(viewModel: LaptopStatsViewModel = hiltViewModel()) {
     val sessions by viewModel.sessions.collectAsState()
-    var selected by remember { mutableStateOf<LaptopSession?>(null) }
+    var selectedId by rememberSaveable { mutableStateOf<String?>(null) }
+    val selected = sessions.firstOrNull { it.id == selectedId }
 
-    val current = selected
-    if (current != null) {
-        SessionDetail(current) { selected = null }
+    BackHandler(enabled = selectedId != null) { selectedId = null }
+
+    if (selected != null) {
+        SessionDetail(selected) { selectedId = null }
         return
     }
 
@@ -102,7 +106,7 @@ fun LaptopStatsScreen(viewModel: LaptopStatsViewModel = hiltViewModel()) {
         }
 
         sessions.forEach { s ->
-            SessionRow(s) { selected = s }
+            SessionRow(s) { selectedId = s.id }
         }
         Spacer(Modifier.height(16.dp))
     }
@@ -213,7 +217,7 @@ private fun Metric(label: String, value: String, tint: androidx.compose.ui.graph
 
 @Composable
 private fun SplitBar(productiveSec: Int, offTaskSec: Int) {
-    val total = (productiveSec + offTaskSec).coerceAtLeast(1)
+    val total = productiveSec + offTaskSec
     Row(
         Modifier
             .fillMaxWidth()
@@ -221,13 +225,18 @@ private fun SplitBar(productiveSec: Int, offTaskSec: Int) {
             .clip(RoundedCornerShape(50))
             .background(InkBorder)
     ) {
-        Box(
-            Modifier
-                .fillMaxWidth(productiveSec.toFloat() / total)
-                .fillMaxHeight()
-                .background(GrassGreen)
-        )
-        Box(Modifier.fillMaxHeight().weight(1f).background(AmberWarn))
+        if (total == 0) return@Row // empty track only
+        if (productiveSec > 0) {
+            Box(
+                Modifier
+                    .fillMaxWidth(productiveSec.toFloat() / total)
+                    .fillMaxHeight()
+                    .background(GrassGreen)
+            )
+        }
+        if (offTaskSec > 0) {
+            Box(Modifier.fillMaxHeight().weight(1f).background(AmberWarn))
+        }
     }
 }
 
@@ -260,7 +269,7 @@ private fun StatCard(onClick: (() -> Unit)? = null, content: @Composable android
     )
 }
 
-private fun fmtMin(sec: Int): String = "${sec / 60}m"
+private fun fmtMin(sec: Int): String = "${(sec + 30) / 60}m" // round to nearest minute
 
 private fun fmtDuration(sec: Int): String {
     val m = sec / 60

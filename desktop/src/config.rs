@@ -29,10 +29,18 @@ pub struct Config {
 }
 
 fn default_allowed_apps() -> Vec<String> {
-    ["Code", "studio64", "idea", "devenv", "WindowsTerminal", "Terminal", "iTerm"]
-        .iter()
-        .map(|s| s.to_string())
-        .collect()
+    [
+        "Code",
+        "studio64",
+        "idea",
+        "devenv",
+        "WindowsTerminal",
+        "Terminal",
+        "iTerm",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect()
 }
 
 impl Config {

@@ -16,15 +16,20 @@ pub fn minimize_foreground() {}
 
 /// Terminate a process by PID (for "force-quit" apps).
 pub fn force_quit(pid: u64) {
-    if pid == 0 { return; }
+    if pid == 0 {
+        return;
+    }
     #[cfg(windows)]
     {
         // /F = force, /T = also kill child processes
         let _ = std::process::Command::new("taskkill")
-            .args(["/PID", &pid.to_string(), "/F", "/T"]).output();
+            .args(["/PID", &pid.to_string(), "/F", "/T"])
+            .output();
     }
     #[cfg(not(windows))]
     {
-        let _ = std::process::Command::new("kill").arg(pid.to_string()).output();
+        let _ = std::process::Command::new("kill")
+            .arg(pid.to_string())
+            .output();
     }
 }

@@ -93,7 +93,7 @@ class LaptopRulesViewModel @Inject constructor(
     /** Top untracked time-sinks from the most recent session, worth a rule. */
     val suggestions: StateFlow<List<AppSuggestion>> =
         combine(policyRepo.policy, sessionsRepo.sessions, dismissed) { policy, sessions, dismissedNames ->
-            val latest = sessions.firstOrNull() ?: return@combine emptyList()
+            val latest = sessions.firstOrNull() ?: return@combine emptyList<AppSuggestion>()
             val known = (policy.allowedApps + policy.blockedApps + policy.forceQuitApps).toSet()
             latest.offTask
                 .filter { it.seconds >= SUGGEST_THRESHOLD_SEC && it.name !in known && it.name !in dismissedNames }
@@ -163,6 +163,8 @@ class LaptopRulesViewModel @Inject constructor(
             AppRole.IGNORE -> p.copy(allowedApps = allowed, blockedApps = blocked, forceQuitApps = forceQuit)
         }
         policyRepo.update(updated)
+        // Don't keep re-suggesting an app the user explicitly chose to ignore.
+        if (role == AppRole.IGNORE) dismissed.value = dismissed.value + name
     }
 
     fun addSite(raw: String) {

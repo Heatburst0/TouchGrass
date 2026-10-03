@@ -4,6 +4,7 @@ import com.example.touchgrass.di.ApplicationScope
 import io.github.jan.supabase.SupabaseClient
 import io.github.jan.supabase.auth.status.SessionStatus
 import io.github.jan.supabase.postgrest.from
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -49,7 +50,7 @@ class DeviceAppsRepository @Inject constructor(
         if (auth.isConfigured) {
             scope.launch {
                 auth.sessionStatus.collect { status ->
-                    if (status is SessionStatus.Authenticated) refresh()
+                    if (status is SessionStatus.Authenticated) refresh() else _apps.value = emptyList()
                 }
             }
         }
@@ -62,6 +63,9 @@ class DeviceAppsRepository @Inject constructor(
                 .map { it.toDomain() }
                 .distinctBy { it.name }
                 .sortedBy { it.displayName.lowercase() }
-        }.onFailure { Timber.tag("Sync").w(it, "device apps refresh failed") }
+        }.onFailure {
+            if (it is CancellationException) throw it
+            Timber.tag("Sync").w(it, "device apps refresh failed")
+        }
     }
 }

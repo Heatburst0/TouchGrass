@@ -1,11 +1,11 @@
 mod config;
+mod enforce;
 mod focus;
+mod hosts;
 mod notify;
 mod schedule;
 mod supabase;
 mod tracker;
-mod enforce;
-mod hosts;
 #[cfg(windows)]
 mod tray;
 
@@ -17,7 +17,10 @@ use std::io::{self, Write};
 use supabase::Supabase;
 
 #[derive(Parser)]
-#[command(name = "touchgrass-agent", about = "TouchGrass laptop focus agent — tracks productive time, synced to your phone.")]
+#[command(
+    name = "touchgrass-agent",
+    about = "TouchGrass laptop focus agent — tracks productive time, synced to your phone."
+)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -53,7 +56,12 @@ fn main() -> Result<()> {
     });
     match Cli::parse().command {
         Command::Login => login(),
-        Command::Focus { minutes, cycles, break_min, block_sites } => focus_cmd(minutes, cycles, break_min, block_sites),
+        Command::Focus {
+            minutes,
+            cycles,
+            break_min,
+            block_sites,
+        } => focus_cmd(minutes, cycles, break_min, block_sites),
         Command::Run => run_cmd(),
         Command::Status => status_cmd(),
     }
@@ -87,8 +95,8 @@ fn login() -> Result<()> {
     println!("(Or, if you set up SMTP and added a code to the template, paste the 6-digit code.)");
     let input = prompt("> ")?;
     let session = if input.contains("token") || input.contains("://") {
-        let token_hash =
-            extract_token(&input).context("couldn't find a token in that link — paste the full URL")?;
+        let token_hash = extract_token(&input)
+            .context("couldn't find a token in that link — paste the full URL")?;
         sb.verify_token_hash(&token_hash)?
     } else {
         sb.verify_otp(&email, input.trim())?
@@ -154,6 +162,7 @@ fn run_cmd() -> Result<()> {
     let mut cfg = Config::load()?;
     // Validate we can auth before entering the watch loop.
     authed(&mut cfg)?;
+    hosts::clear(); // drop any stale block left by a previous unclean exit
     run_watch(cfg)
 }
 
@@ -176,7 +185,10 @@ fn status_cmd() -> Result<()> {
     if let Some(email) = &cfg.email {
         println!("Email: {email}");
     }
-    println!("Device id: {}", cfg.device_id.clone().unwrap_or_else(|| "(none yet)".into()));
+    println!(
+        "Device id: {}",
+        cfg.device_id.clone().unwrap_or_else(|| "(none yet)".into())
+    );
     println!("Allowed apps: {}", cfg.allowed_apps.join(", "));
     Ok(())
 }

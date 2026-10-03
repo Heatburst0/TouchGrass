@@ -71,14 +71,23 @@ pub fn watch(cfg: &mut Config) -> Result<()> {
         let schedules = sb.list_schedules().unwrap_or_default();
         let next = schedules
             .iter()
-            .filter(|s| s.enabled && s.target_platforms.iter().any(|p| p.eq_ignore_ascii_case("DESKTOP")))
+            .filter(|s| {
+                s.enabled
+                    && s.target_platforms
+                        .iter()
+                        .any(|p| p.eq_ignore_ascii_case("DESKTOP"))
+            })
             .filter_map(|s| next_run(s, now).map(|t| (t, s)))
             .min_by_key(|(t, _)| *t);
 
         if let Some((at, sched)) = next {
             let wait = (at - now).num_seconds().max(0) as u64;
             if wait <= POLL_SECS {
-                let title = if sched.title.is_empty() { "Focus".to_string() } else { sched.title.clone() };
+                let title = if sched.title.is_empty() {
+                    "Focus".to_string()
+                } else {
+                    sched.title.clone()
+                };
                 sleep(Duration::from_secs(wait));
                 println!("Starting scheduled \"{title}\"…");
                 let scfg = SessionConfig {
@@ -107,7 +116,10 @@ pub fn watch(cfg: &mut Config) -> Result<()> {
 /// Build a session from the phone's active_sessions.config + this laptop's policy.
 fn session_from_config(config: &serde_json::Value, p: &Policy) -> SessionConfig {
     let get = |k: &str, d: i64| config.get(k).and_then(|v| v.as_i64()).unwrap_or(d);
-    let block_sites = config.get("blockSites").and_then(|v| v.as_bool()).unwrap_or(false);
+    let block_sites = config
+        .get("blockSites")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     SessionConfig {
         focus_min: get("focusBlockMin", 25).max(1),
         break_min: get("breakMin", 5).max(0),
@@ -152,7 +164,10 @@ fn parse_hhmm(s: &str) -> (u32, u32) {
 
 /// None = every day; Some(set) = only those weekdays.
 fn parse_days(recurrence: &serde_json::Value) -> Option<HashSet<Weekday>> {
-    let t = recurrence.get("type").and_then(|v| v.as_str()).unwrap_or("DAILY");
+    let t = recurrence
+        .get("type")
+        .and_then(|v| v.as_str())
+        .unwrap_or("DAILY");
     if t.eq_ignore_ascii_case("DAILY") {
         return None;
     }

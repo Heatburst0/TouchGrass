@@ -5,6 +5,7 @@ import io.github.jan.supabase.SupabaseClient
 import io.github.jan.supabase.auth.status.SessionStatus
 import io.github.jan.supabase.postgrest.from
 import io.github.jan.supabase.postgrest.query.Order
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -12,7 +13,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonPrimitive
 import timber.log.Timber
 import javax.inject.Inject
@@ -46,7 +46,7 @@ private data class RemoteSession(
     val cycles: Int = 1,
     val violations: Int = 0,
     val outcome: String = "",
-    val config: JsonObject = JsonObject(emptyMap())
+    val config: JsonObject? = null
 )
 
 private const val RECENT_LIMIT = 50L
@@ -67,7 +67,7 @@ class LaptopSessionsRepository @Inject constructor(
         if (auth.isConfigured) {
             scope.launch {
                 auth.sessionStatus.collect { status ->
-                    if (status is SessionStatus.Authenticated) refresh()
+                    if (status is SessionStatus.Authenticated) refresh() else _sessions.value = emptyList()
                 }
             }
         }
@@ -81,7 +81,10 @@ class LaptopSessionsRepository @Inject constructor(
                 limit(RECENT_LIMIT)
             }.decodeList<RemoteSession>()
             _sessions.value = rows.map { it.toDomain() }
-        }.onFailure { Timber.tag("Sync").w(it, "laptop sessions refresh failed") }
+        }.onFailure {
+            if (it is CancellationException) throw it
+            Timber.tag("Sync").w(it, "laptop sessions refresh failed")
+        }
     }
 
     private fun RemoteSession.toDomain() = LaptopSession(
@@ -92,15 +95,17 @@ class LaptopSessionsRepository @Inject constructor(
         cycles = cycles,
         violations = violations,
         outcome = outcome,
-        productive = config.appTimes("apps"),
-        offTask = config.appTimes("offTask")
+        productive = config?.appTimes("apps").orEmpty(),
+        offTask = config?.appTimes("offTask").orEmpty()
     )
 
     private fun JsonObject.appTimes(key: String): List<AppTime> {
         val obj = (this[key] as? JsonObject) ?: return emptyList()
         return obj.entries
             .mapNotNull { (name, value) ->
-                runCatching { value.jsonPrimitive.int }.getOrNull()?.let { AppTime(name, it) }
+                // Tolerate ints or floats; drop non-numeric / nested values.
+                runCatching { value.jsonPrimitive.content.toDouble().toInt() }.getOrNull()
+                    ?.let { AppTime(name, it) }
             }
             .filter { it.seconds > 0 }
             .sortedByDescending { it.seconds }

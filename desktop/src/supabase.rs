@@ -114,7 +114,10 @@ impl Supabase {
     pub fn refresh(&self, refresh_token: &str) -> Result<Session> {
         let resp = self
             .http
-            .post(format!("{}/auth/v1/token?grant_type=refresh_token", self.url))
+            .post(format!(
+                "{}/auth/v1/token?grant_type=refresh_token",
+                self.url
+            ))
             .header("apikey", &self.anon_key)
             .json(&json!({ "refresh_token": refresh_token }))
             .send()?;
@@ -141,18 +144,29 @@ impl Supabase {
     }
 
     pub fn upsert_device(&self, id: &str, name: &str) -> Result<()> {
-        self.insert("devices", &json!({ "id": id, "platform": "DESKTOP", "name": name }))
+        self.insert(
+            "devices",
+            &json!({ "id": id, "platform": "DESKTOP", "name": name }),
+        )
     }
 
     /// Report an app seen in the foreground so the phone can offer it in the rules
     /// picker. `app_name` is the lowercased match key; `display_name` is for the UI.
-    pub fn upsert_device_app(&self, device_id: &str, app_name: &str, display_name: &str) -> Result<()> {
-        self.insert("device_apps", &json!({
-            "device_id": device_id,
-            "app_name": app_name,
-            "display_name": display_name,
-            "last_seen": chrono::Utc::now().to_rfc3339(),
-        }))
+    pub fn upsert_device_app(
+        &self,
+        device_id: &str,
+        app_name: &str,
+        display_name: &str,
+    ) -> Result<()> {
+        self.insert(
+            "device_apps",
+            &json!({
+                "device_id": device_id,
+                "app_name": app_name,
+                "display_name": display_name,
+                "last_seen": chrono::Utc::now().to_rfc3339(),
+            }),
+        )
     }
 
     pub fn insert_focus_session(&self, s: &RemoteFocusSession) -> Result<()> {
@@ -189,25 +203,36 @@ impl Supabase {
     }
 
     pub fn upsert_policy(&self, p: &Policy) -> Result<()> {
-        self.insert("focus_policy", &json!({
-            "allowed_apps": p.allowed_apps,
-            "blocked_apps": p.blocked_apps,
-            "force_quit_apps": p.force_quit_apps,
-            "blocked_sites": p.blocked_sites,
-        }))
+        self.insert(
+            "focus_policy",
+            &json!({
+                "allowed_apps": p.allowed_apps,
+                "blocked_apps": p.blocked_apps,
+                "force_quit_apps": p.force_quit_apps,
+                "blocked_sites": p.blocked_sites,
+            }),
+        )
     }
 
     pub fn get_active_session(&self) -> Result<Option<ActiveSession>> {
         self.get_one("active_sessions")
     }
 
-    pub fn set_active_session(&self, started_at: &str, device_id: &str, config: Value) -> Result<()> {
-        self.insert("active_sessions", &json!({
-            "active": true,
-            "started_at": started_at,
-            "origin_device_id": device_id,
-            "config": config,
-        }))
+    pub fn set_active_session(
+        &self,
+        started_at: &str,
+        device_id: &str,
+        config: Value,
+    ) -> Result<()> {
+        self.insert(
+            "active_sessions",
+            &json!({
+                "active": true,
+                "started_at": started_at,
+                "origin_device_id": device_id,
+                "config": config,
+            }),
+        )
     }
 
     pub fn clear_active_session(&self) -> Result<()> {
@@ -244,15 +269,29 @@ fn expect_ok(resp: reqwest::blocking::Response, what: &str) -> Result<()> {
         Ok(())
     } else {
         let code = resp.status();
-        Err(anyhow!("{} failed ({}): {}", what, code, resp.text().unwrap_or_default()))
+        Err(anyhow!(
+            "{} failed ({}): {}",
+            what,
+            code,
+            resp.text().unwrap_or_default()
+        ))
     }
 }
 
-fn json_ok<T: for<'de> Deserialize<'de>>(resp: reqwest::blocking::Response, what: &str) -> Result<T> {
+fn json_ok<T: for<'de> Deserialize<'de>>(
+    resp: reqwest::blocking::Response,
+    what: &str,
+) -> Result<T> {
     if resp.status().is_success() {
-        resp.json::<T>().with_context(|| format!("decode {} response", what))
+        resp.json::<T>()
+            .with_context(|| format!("decode {} response", what))
     } else {
         let code = resp.status();
-        Err(anyhow!("{} failed ({}): {}", what, code, resp.text().unwrap_or_default()))
+        Err(anyhow!(
+            "{} failed ({}): {}",
+            what,
+            code,
+            resp.text().unwrap_or_default()
+        ))
     }
 }
