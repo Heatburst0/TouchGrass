@@ -131,6 +131,7 @@ class FocusViewModel @Inject constructor(
 @Composable
 fun FocusScreen(
     onOpenLaptopRules: () -> Unit = {},
+    onOpenLaptopStats: () -> Unit = {},
     viewModel: FocusViewModel = hiltViewModel()
 ) {
     val active by viewModel.activeSession.collectAsState()
@@ -206,6 +207,7 @@ fun FocusScreen(
                 onSetSyncToLaptop = viewModel::setSyncToLaptop,
                 onSetBlockSites = viewModel::setBlockSites,
                 onOpenLaptopRules = onOpenLaptopRules,
+                onOpenLaptopStats = onOpenLaptopStats,
                 onStart = { cfg, sync, block -> viewModel.start(cfg, sync, block) },
                 onSaveBlocked = { viewModel.saveBlocked(it) }
             )
@@ -255,6 +257,7 @@ private fun SetupCard(
     onSetSyncToLaptop: (Boolean) -> Unit,
     onSetBlockSites: (Boolean) -> Unit,
     onOpenLaptopRules: () -> Unit,
+    onOpenLaptopStats: () -> Unit,
     onStart: (FocusConfig, Boolean, Boolean) -> Unit,
     onSaveBlocked: (Set<String>) -> Unit
 ) {
@@ -392,6 +395,19 @@ private fun SetupCard(
             ) {
                 Text("Laptop rules", color = TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
                 Text("apps & sites  ›", color = GrassGreen, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+            }
+            Spacer(Modifier.height(6.dp))
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .clickable { onOpenLaptopStats() }
+                    .padding(vertical = 6.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("Laptop stats", color = TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                Text("per-app time  ›", color = GrassGreen, fontSize = 14.sp, fontWeight = FontWeight.Bold)
             }
         }
 

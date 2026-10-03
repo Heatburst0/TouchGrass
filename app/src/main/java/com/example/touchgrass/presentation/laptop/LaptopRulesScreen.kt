@@ -43,6 +43,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.touchgrass.core.remote.DeviceAppsRepository
 import com.example.touchgrass.core.remote.FocusPolicyRepository
+import com.example.touchgrass.core.remote.LaptopSessionsRepository
 import com.example.touchgrass.ui.theme.AmberWarn
 import com.example.touchgrass.ui.theme.DangerRed
 import com.example.touchgrass.ui.theme.GrassGreen
@@ -71,14 +72,38 @@ enum class AppRole(val label: String, val description: String) {
 /** A laptop app plus its current role, merged from discovery + saved policy. */
 data class LaptopApp(val name: String, val displayName: String, val role: AppRole)
 
+/** An untracked app the user spent meaningful time in last session. */
+data class AppSuggestion(val name: String, val seconds: Int)
+
+private const val SUGGEST_THRESHOLD_SEC = 120 // only suggest apps with ≥2 min off-task
+
 @HiltViewModel
 class LaptopRulesViewModel @Inject constructor(
     private val policyRepo: FocusPolicyRepository,
-    private val deviceApps: DeviceAppsRepository
+    private val deviceApps: DeviceAppsRepository,
+    private val sessionsRepo: LaptopSessionsRepository
 ) : ViewModel() {
 
     val isConfigured: Boolean = policyRepo.isConfigured
     val policy = policyRepo.policy
+
+    // Apps the user has dismissed from suggestions this screen-session.
+    private val dismissed = MutableStateFlow<Set<String>>(emptySet())
+
+    /** Top untracked time-sinks from the most recent session, worth a rule. */
+    val suggestions: StateFlow<List<AppSuggestion>> =
+        combine(policyRepo.policy, sessionsRepo.sessions, dismissed) { policy, sessions, dismissedNames ->
+            val latest = sessions.firstOrNull() ?: return@combine emptyList()
+            val known = (policy.allowedApps + policy.blockedApps + policy.forceQuitApps).toSet()
+            latest.offTask
+                .filter { it.seconds >= SUGGEST_THRESHOLD_SEC && it.name !in known && it.name !in dismissedNames }
+                .take(3)
+                .map { AppSuggestion(it.name, it.seconds) }
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    fun dismissSuggestion(name: String) {
+        dismissed.value = dismissed.value + name
+    }
 
     // App names that have appeared this screen-session. Grows only, so an app set to
     // Ignore (removed from every policy list) stays visible instead of vanishing.
@@ -109,6 +134,7 @@ class LaptopRulesViewModel @Inject constructor(
             viewModelScope.launch {
                 policyRepo.refresh()
                 deviceApps.refresh()
+                sessionsRepo.refresh()
             }
             // Accumulate every name we ever see so roles can change without rows disappearing.
             viewModelScope.launch {
@@ -163,6 +189,7 @@ private fun roleColor(role: AppRole): Color = when (role) {
 fun LaptopRulesScreen(viewModel: LaptopRulesViewModel = hiltViewModel()) {
     val apps by viewModel.apps.collectAsState()
     val policy by viewModel.policy.collectAsState()
+    val suggestions by viewModel.suggestions.collectAsState()
     var sheetApp by remember { mutableStateOf<LaptopApp?>(null) }
 
     Column(
@@ -187,6 +214,15 @@ fun LaptopRulesScreen(viewModel: LaptopRulesViewModel = hiltViewModel()) {
         }
 
         LegendCard()
+
+        if (suggestions.isNotEmpty()) {
+            SuggestionsCard(
+                items = suggestions,
+                onTrack = { viewModel.setRole(it, AppRole.TRACK) },
+                onBlock = { viewModel.setRole(it, AppRole.BLOCK) },
+                onDismiss = { viewModel.dismissSuggestion(it) }
+            )
+        }
 
         Text("Discovered apps (${apps.size})", color = TextSecondary, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
 
@@ -225,6 +261,49 @@ fun LaptopRulesScreen(viewModel: LaptopRulesViewModel = hiltViewModel()) {
             )
         }
     }
+}
+
+@Composable
+private fun SuggestionsCard(
+    items: List<AppSuggestion>,
+    onTrack: (String) -> Unit,
+    onBlock: (String) -> Unit,
+    onDismiss: (String) -> Unit
+) {
+    RuleCard {
+        Text("Suggestions", color = GrassGreen, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(2.dp))
+        Text("Apps you spent time in last session but haven't set a rule for.", color = TextSecondary, fontSize = 11.sp)
+        items.forEach { s ->
+            Spacer(Modifier.height(12.dp))
+            Text(
+                "${s.seconds / 60}m in ${s.name}",
+                color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold
+            )
+            Spacer(Modifier.height(6.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                SuggestionButton("Track", GrassGreen) { onTrack(s.name) }
+                SuggestionButton("Block", AmberWarn) { onBlock(s.name) }
+                SuggestionButton("Dismiss", TextSecondary) { onDismiss(s.name) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SuggestionButton(label: String, tint: Color, onClick: () -> Unit) {
+    Text(
+        label,
+        color = tint,
+        fontSize = 13.sp,
+        fontWeight = FontWeight.SemiBold,
+        modifier = Modifier
+            .clip(RoundedCornerShape(50))
+            .background(tint.copy(alpha = 0.12f))
+            .border(1.dp, tint.copy(alpha = 0.5f), RoundedCornerShape(50))
+            .clickable { onClick() }
+            .padding(horizontal = 14.dp, vertical = 7.dp)
+    )
 }
 
 @Composable
