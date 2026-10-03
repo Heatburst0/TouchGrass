@@ -24,4 +24,5 @@ gethostname = "0.5"
 ctrlc = "3.4"
 
 [target.'cfg(windows)'.dependencies]
+tauri-winrt-notification = "0.8.1"
 windows = { version = "0.58", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }

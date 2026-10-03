@@ -1,5 +1,6 @@
 mod config;
 mod focus;
+mod notify;
 mod schedule;
 mod supabase;
 mod tracker;
