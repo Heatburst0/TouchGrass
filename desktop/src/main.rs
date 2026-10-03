@@ -6,6 +6,8 @@ mod supabase;
 mod tracker;
 mod enforce;
 mod hosts;
+#[cfg(windows)]
+mod tray;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
@@ -152,6 +154,17 @@ fn run_cmd() -> Result<()> {
     let mut cfg = Config::load()?;
     // Validate we can auth before entering the watch loop.
     authed(&mut cfg)?;
+    run_watch(cfg)
+}
+
+/// On Windows, run under a tray icon (Status / Stop); elsewhere just watch.
+#[cfg(windows)]
+fn run_watch(cfg: Config) -> Result<()> {
+    tray::run(cfg)
+}
+
+#[cfg(not(windows))]
+fn run_watch(mut cfg: Config) -> Result<()> {
     schedule::watch(&mut cfg)
 }
 

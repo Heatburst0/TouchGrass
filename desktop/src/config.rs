@@ -7,7 +7,7 @@ use std::path::PathBuf;
 /// Supabase url/anon key plus the signed-in session's refresh token and this
 /// device's stable id. `allowed_apps` are substrings matched against the active
 /// window's app name to decide what counts as productive.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub supabase_url: String,
     pub anon_key: String,
