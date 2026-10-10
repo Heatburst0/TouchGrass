@@ -1,3 +1,4 @@
+use crate::overlay::{self, Tone};
 use crate::supabase::{RemoteDeviceEvent, RemoteFocusSession, Supabase};
 use crate::tracker::Tracker;
 use crate::{enforce, hosts, notify};
@@ -23,27 +24,32 @@ pub struct SessionConfig {
 
 const SAMPLE_SECS: i64 = 5;
 const REMOTE_CHECK_SECS: i64 = 15; // how often to re-check the shared active_sessions row
-const BLOCK_TOAST_COOLDOWN_SECS: u64 = 60; // don't re-toast the same blocked app more often than this
+const BLOCK_NOTICE_COOLDOWN_SECS: u64 = 60; // don't re-announce the same blocked app more often than this
 
-/// Clears the hosts-file site block when dropped, so an early return or a panic
-/// in a session never leaves sites null-routed.
-struct HostsGuard;
-impl Drop for HostsGuard {
+/// Clears the hosts-file site block and hides the on-screen timer when dropped,
+/// so an early return or a panic never leaves sites null-routed or a stale HUD.
+struct SessionGuard;
+impl Drop for SessionGuard {
     fn drop(&mut self) {
         hosts::clear();
+        overlay::clear_hud();
     }
 }
 
-/// Toast that an app was blocked, at most once per app per cooldown (avoids spam
-/// while a blocked app stays in the foreground).
-fn block_toast(last: &mut HashMap<String, Instant>, app: &str, action: &str) {
+/// Announce that an app was blocked, at most once per app per cooldown (avoids
+/// spam while a blocked app stays in the foreground).
+fn block_notice(last: &mut HashMap<String, Instant>, app: &str, action: &str) {
     let now = Instant::now();
     let fire = last
         .get(app)
-        .is_none_or(|t| now.duration_since(*t).as_secs() >= BLOCK_TOAST_COOLDOWN_SECS);
+        .is_none_or(|t| now.duration_since(*t).as_secs() >= BLOCK_NOTICE_COOLDOWN_SECS);
     if fire {
         last.insert(app.to_string(), now);
-        notify::toast("Focus guard", &format!("{action}: {app}"));
+        overlay::banner(
+            &format!("{action}: {app}"),
+            "Blocked during focus",
+            Tone::Bad,
+        );
     }
 }
 
@@ -59,7 +65,7 @@ pub fn run_session(sb: &Supabase, device_id: &str, cfg: &SessionConfig) -> Resul
         .collect();
 
     hosts::clear(); // remove any stale block first
-    let _hosts_guard = HostsGuard; // clears the block on any exit (incl. panic)
+    let _session_guard = SessionGuard; // clears the block + HUD on any exit (incl. panic)
     let sites_blocked = cfg.block_sites && !cfg.blocked_sites.is_empty();
     if sites_blocked {
         if let Err(e) = hosts::apply(&cfg.blocked_sites) {
@@ -73,13 +79,13 @@ pub fn run_session(sb: &Supabase, device_id: &str, cfg: &SessionConfig) -> Resul
             json!({ "focusBlockMin": cfg.focus_min, "breakMin": cfg.break_min, "cycles": cfg.cycles, "blockSites": cfg.block_sites }));
     }
 
-    notify::toast(
+    overlay::banner(
         "Focus session started",
         &format!(
             "{}×{}m focus{}{}",
             cfg.cycles,
             cfg.focus_min,
-            if cfg.break_min > 0 {
+            if cfg.break_min > 0 && cfg.cycles > 1 {
                 format!(" · {}m breaks", cfg.break_min)
             } else {
                 String::new()
@@ -90,8 +96,10 @@ pub fn run_session(sb: &Supabase, device_id: &str, cfg: &SessionConfig) -> Resul
                 ""
             }
         ),
+        Tone::Good,
     );
-    let mut last_block_toast: HashMap<String, Instant> = HashMap::new();
+    let mut last_block_notice: HashMap<String, Instant> = HashMap::new();
+    let mut off_secs = 0i64; // total off-task seconds, for the live HUD
 
     let mut tracker = Tracker::new();
     let mut active_secs = 0i64;
@@ -107,11 +115,15 @@ pub fn run_session(sb: &Supabase, device_id: &str, cfg: &SessionConfig) -> Resul
             "[cycle {}/{}] Focus {}m — stay in your allowed apps.",
             cycle, cfg.cycles, cfg.focus_min
         );
-        notify::toast(
-            &format!("Focus · cycle {}/{}", cycle, cfg.cycles),
-            &format!("{}m of focus — stay on task.", cfg.focus_min),
-        );
         let block_secs = cfg.focus_min * 60;
+        overlay::phase(true, cycle, cfg.cycles, block_secs);
+        if cycle > 1 {
+            overlay::banner(
+                &format!("Back to focus · cycle {}/{}", cycle, cfg.cycles),
+                &format!("{}m of focus — stay on task.", cfg.focus_min),
+                Tone::Good,
+            );
+        }
         let mut elapsed = 0i64;
         let mut win_active = 0i64;
         let mut win_idle = 0i64;
@@ -139,10 +151,10 @@ pub fn run_session(sb: &Supabase, device_id: &str, cfg: &SessionConfig) -> Resul
             }
             if quit.iter().any(|a| app.contains(a)) {
                 enforce::force_quit(pid);
-                block_toast(&mut last_block_toast, &app, "Force-quit");
+                block_notice(&mut last_block_notice, &app, "Force-quit");
             } else if blocked.iter().any(|a| app.contains(a)) {
                 enforce::minimize_foreground();
-                block_toast(&mut last_block_toast, &app, "Minimized");
+                block_notice(&mut last_block_notice, &app, "Minimized");
             }
             let on_task = allowed.iter().any(|a| app.contains(a));
             if active {
@@ -155,8 +167,10 @@ pub fn run_session(sb: &Supabase, device_id: &str, cfg: &SessionConfig) -> Resul
                 *by_app.entry(app.clone()).or_default() += SAMPLE_SECS;
             } else if active {
                 violations += 1;
+                off_secs += SAMPLE_SECS;
                 *off_app.entry(app.clone()).or_default() += SAMPLE_SECS;
             }
+            overlay::stats(active_secs, off_secs);
             if win_active + win_idle >= 60 {
                 let _ = sb.insert_device_event(&RemoteDeviceEvent {
                     device_id: device_id.to_string(),
@@ -171,6 +185,12 @@ pub fn run_session(sb: &Supabase, device_id: &str, cfg: &SessionConfig) -> Resul
         }
         if cycle < cfg.cycles && cfg.break_min > 0 {
             println!("[cycle {}/{}] Break {}m.", cycle, cfg.cycles, cfg.break_min);
+            overlay::phase(false, cycle, cfg.cycles, cfg.break_min * 60);
+            overlay::banner(
+                &format!("Break · {}m", cfg.break_min),
+                "Look away from the screen and stretch.",
+                Tone::Warn,
+            );
             sleep(Duration::from_secs((cfg.break_min * 60) as u64));
         }
     }
@@ -200,14 +220,15 @@ pub fn run_session(sb: &Supabase, device_id: &str, cfg: &SessionConfig) -> Resul
     })?;
 
     let off_task_min = off_app.values().sum::<i64>() / 60;
-    notify::toast(
-        if outcome == "COMPLETED" {
-            "Focus session complete"
-        } else {
-            "Focus session ended"
-        },
-        &format!("{focused_min} min productive · {off_task_min} min off-task"),
-    );
+    let title = if outcome == "COMPLETED" {
+        "Focus session complete"
+    } else {
+        "Focus session ended"
+    };
+    let summary = format!("{focused_min} min productive · {off_task_min} min off-task");
+    overlay::clear_hud();
+    overlay::banner(title, &summary, Tone::Good);
+    notify::toast(title, &summary); // keeps a record in the Action Center
 
     println!(
         "Session complete: {}/{} focus min productive · {} off-task switches. Synced.",

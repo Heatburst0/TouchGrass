@@ -37,6 +37,11 @@ pub fn run(cfg: Config) -> Result<()> {
         .with_icon(make_icon())
         .build()?;
 
+    // On-screen timer + banners share this thread's message pump.
+    if let Err(e) = crate::overlay::init() {
+        eprintln!("overlay unavailable: {e}");
+    }
+
     // The watch loop runs on a background thread. If it ever returns an error or
     // panics, clean up the hosts block, tell the user, and ask the pump to quit —
     // otherwise a dead thread would leave the tray saying "Running" forever.
@@ -80,10 +85,11 @@ pub fn run(cfg: Config) -> Result<()> {
                 stop_requested = true;
                 break;
             } else if event.id == status_id {
-                let e = email.clone();
-                thread::spawn(move || {
-                    crate::notify::toast("TouchGrass agent", &format!("Running · {e}"))
-                });
+                crate::overlay::banner(
+                    "TouchGrass agent is running",
+                    &format!("Signed in as {email}"),
+                    crate::overlay::Tone::Good,
+                );
             }
         }
         if stop_requested {

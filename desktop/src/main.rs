@@ -3,6 +3,7 @@ mod enforce;
 mod focus;
 mod hosts;
 mod notify;
+mod overlay;
 mod schedule;
 mod supabase;
 mod tracker;
@@ -49,6 +50,8 @@ enum Command {
 }
 
 fn main() -> Result<()> {
+    // Must precede any window creation (tray icon, overlays) or they render blurry.
+    overlay::set_dpi_aware();
     // Safety net: if the agent is Ctrl-C'd mid-session, undo any hosts-file block.
     let _ = ctrlc::set_handler(|| {
         hosts::clear();
@@ -133,7 +136,8 @@ fn focus_cmd(minutes: i64, cycles: i64, break_min: i64, block_sites: bool) -> Re
         watch_remote_stop: false,
         broadcast: false,
     };
-    run_session(&sb, &device_id, &scfg)
+    // Pump Win32 messages on this thread so the on-screen timer can draw.
+    overlay::run_blocking(move || run_session(&sb, &device_id, &scfg))
 }
 
 /// The effective desktop rules: the server focus_policy if it has anything, else
