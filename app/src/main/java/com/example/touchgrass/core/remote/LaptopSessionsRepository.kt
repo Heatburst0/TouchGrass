@@ -80,7 +80,8 @@ class LaptopSessionsRepository @Inject constructor(
                 order("started_at", Order.DESCENDING)
                 limit(RECENT_LIMIT)
             }.decodeList<RemoteSession>()
-            _sessions.value = rows.map { it.toDomain() }
+            // Phone sessions sync into the same table; only the agent writes `apps`.
+            _sessions.value = rows.filter { it.config?.containsKey("apps") == true }.map { it.toDomain() }
         }.onFailure {
             if (it is CancellationException) throw it
             Timber.tag("Sync").w(it, "laptop sessions refresh failed")

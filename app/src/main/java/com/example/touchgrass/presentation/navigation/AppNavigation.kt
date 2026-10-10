@@ -34,7 +34,6 @@ import com.example.touchgrass.presentation.dashboard.DoomscrollDashboard
 import com.example.touchgrass.features.focus.ui.FocusScreen
 import com.example.touchgrass.presentation.goals.GoalsScreen
 import com.example.touchgrass.presentation.laptop.LaptopRulesScreen
-import com.example.touchgrass.presentation.laptop.LaptopStatsScreen
 import com.example.touchgrass.presentation.tools.ToolsHubScreen
 import com.example.touchgrass.ui.theme.GrassGreen
 import com.example.touchgrass.ui.theme.Ink
@@ -49,7 +48,6 @@ object Routes {
     const val TOOLS = "tools"
     const val ACCOUNT = "account"
     const val LAPTOP_RULES = "laptop_rules"
-    const val LAPTOP_STATS = "laptop_stats"
     const val LIBRARY = "library"
     const val READER = "reader/{bookId}"
     const val QUIZ = "quiz/{bookId}"
@@ -123,16 +121,10 @@ fun TouchGrassAppRoot(startRoute: String? = null) {
                 GoalsScreen()
             }
             composable(Routes.FOCUS) {
-                FocusScreen(
-                    onOpenLaptopRules = { navController.navigate(Routes.LAPTOP_RULES) },
-                    onOpenLaptopStats = { navController.navigate(Routes.LAPTOP_STATS) }
-                )
+                FocusScreen(onOpenLaptopRules = { navController.navigate(Routes.LAPTOP_RULES) })
             }
             composable(Routes.LAPTOP_RULES) {
                 LaptopRulesScreen()
-            }
-            composable(Routes.LAPTOP_STATS) {
-                LaptopStatsScreen()
             }
             composable(Routes.TOOLS) {
                 ToolsHubScreen(onOpenRoute = { navController.navigate(it) })

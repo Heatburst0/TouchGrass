@@ -36,6 +36,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -77,25 +78,79 @@ import com.example.touchgrass.ui.theme.InkElevated
 import com.example.touchgrass.ui.theme.TextPrimary
 import com.example.touchgrass.ui.theme.TextSecondary
 import dagger.hilt.android.lifecycle.HiltViewModel
+import com.example.touchgrass.features.focus.insights.AppCategoryLookup
+import com.example.touchgrass.features.focus.insights.RecordItem
+import com.example.touchgrass.features.focus.insights.RecordMerger
+import com.example.touchgrass.features.focus.insights.UsageEventsSource
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 import javax.inject.Inject
+
+/** Only suggest apps used at least this much in the last week. */
+private const val SUGGEST_MIN_WEEK_MS = 20 * 60_000L
+private const val SUGGEST_MAX = 3
+private const val WEEK_MS = 7 * 24 * 60 * 60_000L
 
 @HiltViewModel
 class FocusViewModel @Inject constructor(
     private val manager: FocusSessionManager,
     private val settings: SettingsRepository,
     private val installedApps: InstalledApps,
-    private val scheduleRepo: com.example.touchgrass.features.focus.FocusScheduleRepository
+    private val scheduleRepo: com.example.touchgrass.features.focus.FocusScheduleRepository,
+    private val usageEvents: UsageEventsSource,
+    private val appCategories: AppCategoryLookup
 ) : ViewModel() {
     val activeSession = manager.activeSession
-    val recentSessions = manager.recentSessions
-    val stats = manager.stats
     val rememberedBlocked = settings.focusBlockedPackages
+
+    /** "Your record": phone + laptop sessions, a synced pair merged into one row. */
+    val recordItems: StateFlow<List<RecordItem>> = manager.recentSessions
+        .map { RecordMerger.merge(it) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    val recordStats: StateFlow<FocusStats> = recordItems
+        .map { RecordMerger.stats(it) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), FocusStats(0, 0, 0))
+
+    private val weekUsage = MutableStateFlow<Map<String, Long>>(emptyMap())
+    private val dismissedSuggestions = MutableStateFlow<Set<String>>(emptySet())
+
+    /** Social / entertainment apps used a lot this week that focus doesn't block yet. */
+    val blockSuggestions: StateFlow<List<BlockSuggestion>> =
+        combine(weekUsage, rememberedBlocked, dismissedSuggestions) { usage, remembered, dismissed ->
+            val blocked = remembered.ifEmpty { ScreenTimeNudger.WATCHED_PACKAGES }
+            usage.entries
+                .filter { (pkg, ms) ->
+                    ms >= SUGGEST_MIN_WEEK_MS && pkg !in blocked && pkg !in dismissed &&
+                        appCategories.isDistracting(pkg)
+                }
+                .sortedByDescending { it.value }
+                .take(SUGGEST_MAX)
+                .map { BlockSuggestion(it.key, installedApps.label(it.key), it.value) }
+        }
+            .flowOn(Dispatchers.Default)
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** Add a suggested app to the focus blocklist. */
+    fun blockSuggested(pkg: String) {
+        viewModelScope.launch {
+            val current = settings.focusBlockedPackages.first().ifEmpty { ScreenTimeNudger.WATCHED_PACKAGES }
+            settings.setFocusBlockedPackages(current + pkg)
+        }
+    }
+
+    /** "Not now": hide the current suggestions for this visit. */
+    fun dismissSuggestions() {
+        dismissedSuggestions.value = dismissedSuggestions.value + blockSuggestions.value.map { it.packageName }
+    }
     val schedules = scheduleRepo.schedules
     val syncToLaptop = settings.syncFocusToLaptop
     val blockSitesOnLaptop = settings.blockSitesOnLaptop
@@ -108,6 +163,9 @@ class FocusViewModel @Inject constructor(
 
     init {
         viewModelScope.launch { apps.value = installedApps.launchable() }
+        viewModelScope.launch {
+            weekUsage.value = usageEvents.totalForegroundMillis(System.currentTimeMillis() - WEEK_MS)
+        }
     }
 
     fun start(config: FocusConfig, syncToLaptop: Boolean, blockSites: Boolean) =
@@ -131,14 +189,17 @@ class FocusViewModel @Inject constructor(
 @Composable
 fun FocusScreen(
     onOpenLaptopRules: () -> Unit = {},
-    onOpenLaptopStats: () -> Unit = {},
     viewModel: FocusViewModel = hiltViewModel()
 ) {
     val active by viewModel.activeSession.collectAsState()
     val syncToLaptop by viewModel.syncToLaptop.collectAsState(initial = false)
     val blockSites by viewModel.blockSitesOnLaptop.collectAsState(initial = false)
-    val stats by viewModel.stats.collectAsState(initial = FocusStats(0, 0, 0))
-    val sessions by viewModel.recentSessions.collectAsState(initial = emptyList())
+    val recordStats by viewModel.recordStats.collectAsState()
+    val recordItems by viewModel.recordItems.collectAsState()
+    val suggestions by viewModel.blockSuggestions.collectAsState()
+    // Track the open row by id so the sheet shows fresh data when sync fills in detail.
+    var openRecordId by rememberSaveable { mutableStateOf<Long?>(null) }
+    val openRecord = recordItems.firstOrNull { it.primary.id == openRecordId }
     val remembered by viewModel.rememberedBlocked.collectAsState(initial = emptySet())
     val apps by viewModel.apps.collectAsState()
     val schedules by viewModel.schedules.collectAsState()
@@ -207,7 +268,6 @@ fun FocusScreen(
                 onSetSyncToLaptop = viewModel::setSyncToLaptop,
                 onSetBlockSites = viewModel::setBlockSites,
                 onOpenLaptopRules = onOpenLaptopRules,
-                onOpenLaptopStats = onOpenLaptopStats,
                 onStart = { cfg, sync, block -> viewModel.start(cfg, sync, block) },
                 onSaveBlocked = { viewModel.saveBlocked(it) }
             )
@@ -234,6 +294,15 @@ fun FocusScreen(
             FocusPhase.Done -> DoneCard(violations = viewModel.violations, onClear = { viewModel.clearToIdle() })
         }
 
+        if (phase == FocusPhase.Idle && suggestions.isNotEmpty()) {
+            Spacer(Modifier.height(16.dp))
+            BlockSuggestionsCard(
+                items = suggestions,
+                onBlock = viewModel::blockSuggested,
+                onDismiss = viewModel::dismissSuggestions
+            )
+        }
+
         Spacer(Modifier.height(24.dp))
         ScheduleSection(
             schedules = schedules,
@@ -242,8 +311,12 @@ fun FocusScreen(
             onDelete = { viewModel.deleteSchedule(it) }
         )
         Spacer(Modifier.height(24.dp))
-        HistorySection(stats = stats, sessions = sessions)
+        RecordSection(stats = recordStats, items = recordItems, onOpen = { openRecordId = it.primary.id })
         Spacer(Modifier.height(24.dp))
+    }
+
+    openRecord?.let { item ->
+        SessionDetailSheet(item = item, phoneLabel = viewModel::label, onDismiss = { openRecordId = null })
     }
 }
 
@@ -257,7 +330,6 @@ private fun SetupCard(
     onSetSyncToLaptop: (Boolean) -> Unit,
     onSetBlockSites: (Boolean) -> Unit,
     onOpenLaptopRules: () -> Unit,
-    onOpenLaptopStats: () -> Unit,
     onStart: (FocusConfig, Boolean, Boolean) -> Unit,
     onSaveBlocked: (Set<String>) -> Unit
 ) {
@@ -395,19 +467,6 @@ private fun SetupCard(
             ) {
                 Text("Laptop rules", color = TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
                 Text("apps & sites  ›", color = GrassGreen, fontSize = 14.sp, fontWeight = FontWeight.Bold)
-            }
-            Spacer(Modifier.height(6.dp))
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(12.dp))
-                    .clickable { onOpenLaptopStats() }
-                    .padding(vertical = 6.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text("Laptop stats", color = TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
-                Text("per-app time  ›", color = GrassGreen, fontSize = 14.sp, fontWeight = FontWeight.Bold)
             }
         }
 
@@ -610,68 +669,6 @@ private fun DoneCard(violations: Int, onClear: () -> Unit) {
         }
     }
 }
-
-@Composable
-private fun HistorySection(stats: FocusStats, sessions: List<FocusSessionEntity>) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(20.dp))
-            .background(InkElevated)
-            .border(1.dp, InkBorder, RoundedCornerShape(20.dp))
-            .padding(20.dp)
-    ) {
-        Text("Your record", color = TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
-        Spacer(Modifier.height(10.dp))
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Stat("${stats.completed}", "successful")
-            Stat("${stats.total}", "started")
-            Stat("${stats.focusedMinutes}", "focus min")
-        }
-        if (sessions.isEmpty()) {
-            Spacer(Modifier.height(14.dp))
-            Text("No sessions yet — start one above.", color = TextSecondary, fontSize = 12.sp)
-        } else {
-            Spacer(Modifier.height(16.dp))
-            sessions.forEach { s -> SessionRow(s); Spacer(Modifier.height(10.dp)) }
-        }
-    }
-}
-
-@Composable
-private fun Stat(value: String, label: String) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(value, color = GrassGreen, fontSize = 22.sp, fontWeight = FontWeight.Black)
-        Text(label, color = TextSecondary, fontSize = 11.sp)
-    }
-}
-
-@Composable
-private fun SessionRow(s: FocusSessionEntity) {
-    val completed = s.outcome == FocusOutcome.COMPLETED.name
-    val accent = if (completed) GrassGreen else AmberWarn
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Column(Modifier.weight(1f)) {
-            Text(dateFmt.format(Date(s.startedAt)), color = TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-            Text(
-                "${s.focusedMin}/${s.plannedFocusMin} min · ${s.cycles} cycles" +
-                    (if (s.strict) " · strict" else "") +
-                    (if (s.violations > 0) " · ${s.violations} blocked" else ""),
-                color = TextSecondary, fontSize = 11.sp
-            )
-        }
-        Text(
-            if (completed) "✓ done" else "ended",
-            color = accent, fontSize = 12.sp, fontWeight = FontWeight.Bold
-        )
-    }
-}
-
-private val dateFmt = SimpleDateFormat("MMM d, h:mm a", Locale.getDefault())
 
 @Composable
 private fun StepperRow(label: String, value: String, onMinus: () -> Unit, onPlus: () -> Unit) {

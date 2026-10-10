@@ -95,6 +95,18 @@ interface FocusSessionDao {
     @Query("SELECT COUNT(*) FROM focus_sessions WHERE uid = :uid")
     suspend fun countByUid(uid: String): Int
 
+    /** Record which device a synced session ran on, and fill in its per-app
+     *  breakdown if none is stored yet (never overwrites a captured one). */
+    @Query(
+        """
+        UPDATE focus_sessions
+        SET source = :source,
+            appUsageJson = CASE WHEN appUsageJson = '' THEN :json ELSE appUsageJson END
+        WHERE uid = :uid
+        """
+    )
+    suspend fun fillDetail(uid: String, source: String, json: String)
+
     @Query(
         """
         SELECT

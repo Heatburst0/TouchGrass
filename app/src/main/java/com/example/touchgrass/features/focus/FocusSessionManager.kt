@@ -9,6 +9,10 @@ import com.example.touchgrass.core.notifications.NotifChannel
 import com.example.touchgrass.core.notifications.Notifier
 import com.example.touchgrass.core.remote.ActiveSessionRepository
 import com.example.touchgrass.di.ApplicationScope
+import com.example.touchgrass.features.focus.insights.AppCategoryLookup
+import com.example.touchgrass.features.focus.insights.SessionAppUsage
+import com.example.touchgrass.features.focus.insights.SessionSource
+import com.example.touchgrass.features.focus.insights.UsageEventsSource
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -17,6 +21,8 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -39,6 +45,8 @@ class FocusSessionManager @Inject constructor(
     private val notifier: Notifier,
     private val orchestrator: GoalOrchestrator,
     private val activeSessions: ActiveSessionRepository,
+    private val usageEvents: UsageEventsSource,
+    private val appCategories: AppCategoryLookup,
     @ApplicationScope private val scope: CoroutineScope
 ) {
     @Volatile
@@ -114,12 +122,19 @@ class FocusSessionManager @Inject constructor(
         }
     }
 
-    private suspend fun settleInternal(active: ActiveFocus, clear: Boolean) {
+    // Alarm, End button and app-open can all settle the same session; serialize them so
+    // the "already recorded?" check and the insert can't interleave (no duplicate rows).
+    private val settleLock = Mutex()
+
+    private suspend fun settleInternal(active: ActiveFocus, clear: Boolean) = settleLock.withLock {
         val now = System.currentTimeMillis()
         val done = focusPhaseAt(active, now) is FocusPhase.Done
         if (sessionDao.countByStart(active.startAt) == 0) {
             val outcome = if (done) FocusOutcome.COMPLETED else FocusOutcome.ENDED_EARLY
             val focused = if (done) active.config.focusMinutes else focusedMinutesAt(active, now)
+            // A completed session may be settled late (next app open): measure usage only
+            // up to its real end, not app use that happened afterwards.
+            val usageEnd = if (done) minOf(now, active.endAt) else now
             sessionDao.insert(
                 FocusSessionEntity(
                     startedAt = active.startAt,
@@ -129,7 +144,9 @@ class FocusSessionManager @Inject constructor(
                     cycles = active.config.cycles,
                     violations = violations,
                     strict = active.config.strict,
-                    outcome = outcome.name
+                    outcome = outcome.name,
+                    source = SessionSource.PHONE.name,
+                    appUsageJson = phoneUsageJson(active, usageEnd)
                 )
             )
             if (outcome == FocusOutcome.COMPLETED) {
@@ -146,6 +163,21 @@ class FocusSessionManager @Inject constructor(
         scheduler.cancel()
         activeSessions.clear()
         if (clear) settings.setActiveFocusJson("")
+    }
+
+    /** Per-app phone time during the session, split into time wasted (blocked, or a
+     *  social / video / game / news app) vs everything else. "" if usage access is off. */
+    private suspend fun phoneUsageJson(active: ActiveFocus, end: Long): String {
+        val perApp = usageEvents.foregroundSeconds(active.startAt, end)
+        if (perApp.isEmpty()) return ""
+        val blocked = active.config.blockedPackages
+        val (wasted, other) = perApp.entries.partition { (pkg, _) ->
+            pkg in blocked || appCategories.isDistracting(pkg)
+        }
+        return SessionAppUsage(
+            apps = other.associate { it.key to it.value },
+            offTask = wasted.associate { it.key to it.value }
+        ).toJson()
     }
 
     private suspend fun currentActive(): ActiveFocus? =

@@ -13,7 +13,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         GoalEntity::class,
         FocusSessionEntity::class
     ],
-    version = 10,
+    version = 11,
     exportSchema = false
 )
 abstract class TouchGrassDatabase : RoomDatabase() {
@@ -137,6 +137,14 @@ abstract class TouchGrassDatabase : RoomDatabase() {
                 db.execSQL("ALTER TABLE focus_sessions ADD COLUMN uid TEXT NOT NULL DEFAULT ''")
                 db.execSQL("ALTER TABLE focus_sessions ADD COLUMN synced INTEGER NOT NULL DEFAULT 0")
                 db.execSQL("ALTER TABLE focus_sessions ADD COLUMN remote INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
+        /** v11: which device a session ran on + its per-app time breakdown. */
+        val MIGRATION_10_11 = object : Migration(10, 11) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE focus_sessions ADD COLUMN source TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE focus_sessions ADD COLUMN appUsageJson TEXT NOT NULL DEFAULT ''")
             }
         }
 

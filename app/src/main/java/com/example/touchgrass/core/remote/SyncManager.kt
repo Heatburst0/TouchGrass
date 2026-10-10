@@ -4,6 +4,8 @@ import com.example.touchgrass.core.data.db.FocusSessionDao
 import com.example.touchgrass.core.data.db.FocusSessionEntity
 import com.example.touchgrass.core.sync.DeviceIdentity
 import com.example.touchgrass.di.ApplicationScope
+import com.example.touchgrass.features.focus.insights.SessionAppUsage
+import com.example.touchgrass.features.focus.insights.SessionSource
 import io.github.jan.supabase.SupabaseClient
 import io.github.jan.supabase.auth.status.SessionStatus
 import io.github.jan.supabase.postgrest.from
@@ -13,6 +15,7 @@ import io.github.jan.supabase.realtime.postgresChangeFlow
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonObject
 import timber.log.Timber
 import java.time.Instant
 import java.time.OffsetDateTime
@@ -35,6 +38,30 @@ private data class RemoteFocusSession(
     val strict: Boolean,
     val outcome: String
 )
+
+/** focus_sessions row as pulled — includes `config`, where the laptop agent stores
+ *  its per-app breakdown ({allowed, apps, offTask}). Separate from the push shape
+ *  so a push never sends `config` (it would null a NOT NULL column). */
+@Serializable
+private data class PulledFocusSession(
+    val id: String,
+    val started_at: String,
+    val ended_at: String? = null,
+    val planned_focus_min: Int,
+    val focused_min: Int,
+    val cycles: Int,
+    val violations: Int,
+    val strict: Boolean,
+    val outcome: String,
+    val config: JsonObject? = null
+) {
+    /** The laptop agent always writes an `apps` map; phone pushes leave config empty. */
+    val source: SessionSource
+        get() = if (config?.containsKey("apps") == true) SessionSource.LAPTOP else SessionSource.PHONE
+
+    val usageJson: String
+        get() = SessionAppUsage.fromJsonObject(config).let { if (it.isEmpty) "" else it.toJson() }
+}
 
 /**
  * Cross-device sync of focus sessions. On sign-in: register the device, push local
@@ -99,9 +126,13 @@ class SyncManager @Inject constructor(
     }
 
     private suspend fun pullFocusSessions() {
-        val remote = supabase.from("focus_sessions").select().decodeList<RemoteFocusSession>()
+        val remote = supabase.from("focus_sessions").select().decodeList<PulledFocusSession>()
         remote.forEach { r ->
-            if (focusSessionDao.countByUid(r.id) > 0) return@forEach
+            if (focusSessionDao.countByUid(r.id) > 0) {
+                // Already have it (pulled before v11, or our own): back-fill device + detail.
+                focusSessionDao.fillDetail(r.id, r.source.name, r.usageJson)
+                return@forEach
+            }
             val started = OffsetDateTime.parse(r.started_at).toInstant().toEpochMilli()
             val ended = r.ended_at?.let { OffsetDateTime.parse(it).toInstant().toEpochMilli() } ?: started
             focusSessionDao.insert(
@@ -116,7 +147,9 @@ class SyncManager @Inject constructor(
                     outcome = r.outcome,
                     uid = r.id,
                     synced = true,
-                    remote = true
+                    remote = true,
+                    source = r.source.name,
+                    appUsageJson = r.usageJson
                 )
             )
         }

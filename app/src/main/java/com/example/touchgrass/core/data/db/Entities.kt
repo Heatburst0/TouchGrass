@@ -100,7 +100,11 @@ data class FocusSessionEntity(
     val outcome: String,          // FocusOutcome.name
     val uid: String = "",         // stable cross-device id (= Supabase row id); "" until assigned
     val synced: Boolean = false,  // pushed to the backend yet?
-    val remote: Boolean = false   // pulled from another device (vs recorded here)
+    val remote: Boolean = false,  // pulled from another device (vs recorded here)
+    val source: String = "",      // SessionSource name: PHONE / LAPTOP ("" = before v11 → phone)
+    // Per-app foreground seconds, same shape the laptop agent writes:
+    // {"apps":{pkg:secs},"offTask":{pkg:secs}}. "" = no breakdown captured.
+    val appUsageJson: String = ""
 )
 
 /**
