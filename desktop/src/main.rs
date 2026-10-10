@@ -131,11 +131,16 @@ fn login() -> Result<()> {
     let email = prompt("Email: ")?;
     sb.send_otp(&email)?;
     println!("Sent a sign-in email to {email}.");
-    println!("Open it, copy the \"Sign in\" link, and paste it here.");
-    println!("(Or, if you set up SMTP and added a code to the template, paste the 6-digit code.)");
+    println!("In the email, right-click \"Sign in\" -> Copy link address, and paste it here.");
+    println!("(Already clicked it? Paste the URL from the browser's address bar instead.)");
     let input = prompt("> ")?;
-    let session = if input.contains("token") || input.contains("://") {
-        let token_hash = extract_token(&input)
+    let session = if let Some(refresh_token) = url_param(&input, "refresh_token") {
+        // The link was opened: the browser landed on the redirect URL, whose
+        // fragment already carries a session — exchange its refresh token.
+        sb.refresh(&refresh_token)?
+    } else if input.contains("://") || input.contains("token") {
+        let token_hash = url_param(&input, "token_hash")
+            .or_else(|| url_param(&input, "token"))
             .context("couldn't find a token in that link — paste the full URL")?;
         sb.verify_token_hash(&token_hash)?
     } else {
@@ -253,16 +258,23 @@ fn status_cmd() -> Result<()> {
 }
 
 /// Pull the verification token out of a pasted Supabase sign-in link.
-fn extract_token(link: &str) -> Option<String> {
-    for key in ["token_hash=", "token="] {
-        if let Some(i) = link.find(key) {
+/// Value of query/fragment parameter `name` in a pasted URL. Matches whole
+/// parameter names only, so `token` never matches inside `access_token`.
+fn url_param(link: &str, name: &str) -> Option<String> {
+    let key = format!("{name}=");
+    let mut from = 0;
+    while let Some(offset) = link[from..].find(&key) {
+        let i = from + offset;
+        let at_boundary = i == 0 || matches!(link.as_bytes()[i - 1], b'?' | b'&' | b'#');
+        if at_boundary {
             let rest = &link[i + key.len()..];
-            let end = rest.find('&').unwrap_or(rest.len());
-            let val = rest[..end].trim();
-            if !val.is_empty() {
-                return Some(val.to_string());
+            let end = rest.find(['&', '#']).unwrap_or(rest.len());
+            let value = rest[..end].trim();
+            if !value.is_empty() {
+                return Some(value.to_string());
             }
         }
+        from = i + key.len();
     }
     None
 }
@@ -273,4 +285,40 @@ fn prompt(label: &str) -> Result<String> {
     let mut s = String::new();
     io::stdin().read_line(&mut s)?;
     Ok(s.trim().to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::url_param;
+
+    #[test]
+    fn reads_token_from_the_emailed_verify_link() {
+        let link = "https://x.supabase.co/auth/v1/verify?token=abc123&type=magiclink&redirect_to=http://localhost:3000";
+        assert_eq!(url_param(link, "token").as_deref(), Some("abc123"));
+        assert_eq!(url_param(link, "token_hash"), None);
+    }
+
+    #[test]
+    fn reads_refresh_token_from_the_redirect_fragment() {
+        let link = "http://localhost:3000/#access_token=eyJhbGc&expires_in=3600&refresh_token=rt123&token_type=bearer";
+        assert_eq!(url_param(link, "refresh_token").as_deref(), Some("rt123"));
+    }
+
+    #[test]
+    fn token_does_not_match_inside_access_token_or_token_type() {
+        let link = "http://localhost:3000/#access_token=eyJhbGc&token_type=bearer";
+        assert_eq!(url_param(link, "token"), None);
+    }
+
+    #[test]
+    fn reads_token_hash_param() {
+        let link = "https://x.supabase.co/auth/v1/verify?token_hash=h4sh&type=magiclink";
+        assert_eq!(url_param(link, "token_hash").as_deref(), Some("h4sh"));
+    }
+
+    #[test]
+    fn missing_or_empty_param_is_none() {
+        assert_eq!(url_param("https://example.com/?token=", "token"), None);
+        assert_eq!(url_param("123456", "token"), None);
+    }
 }
