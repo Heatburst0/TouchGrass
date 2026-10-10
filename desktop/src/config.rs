@@ -44,11 +44,39 @@ fn default_allowed_apps() -> Vec<String> {
 }
 
 impl Config {
-    pub fn path() -> Result<PathBuf> {
-        let dir = dirs::config_dir()
+    fn dir() -> Result<PathBuf> {
+        Ok(dirs::config_dir()
             .context("could not resolve a config directory")?
-            .join("touchgrass");
-        Ok(dir.join("agent.toml"))
+            .join("touchgrass"))
+    }
+
+    pub fn path() -> Result<PathBuf> {
+        Ok(Self::dir()?.join("agent.toml"))
+    }
+
+    /// Where the hidden agent records errors it can't otherwise show.
+    pub fn log_path() -> Result<PathBuf> {
+        Ok(Self::dir()?.join("agent.log"))
+    }
+
+    /// Exclusive cross-process lock held while refreshing the session. Supabase
+    /// rotates the refresh token on every use, so two agent processes refreshing
+    /// at once would consume each other's token. Released when the file drops.
+    pub fn auth_lock() -> Result<fs::File> {
+        let file = open_lock_file("auth.lock")?;
+        file.lock().context("could not lock auth.lock")?;
+        Ok(file)
+    }
+
+    /// Single-instance guard for the `run` watcher: `None` if another is running.
+    /// Hold the returned file for the life of the process.
+    pub fn try_run_lock() -> Result<Option<fs::File>> {
+        let file = open_lock_file("run.lock")?;
+        match file.try_lock() {
+            Ok(()) => Ok(Some(file)),
+            Err(fs::TryLockError::WouldBlock) => Ok(None),
+            Err(fs::TryLockError::Error(e)) => Err(e).context("could not lock run.lock"),
+        }
     }
 
     pub fn load() -> Result<Config> {
@@ -81,4 +109,16 @@ impl Config {
         self.save()?;
         Ok(id)
     }
+}
+
+/// Open (creating if needed) an empty lock file in the config directory.
+fn open_lock_file(name: &str) -> Result<fs::File> {
+    let dir = Config::dir()?;
+    fs::create_dir_all(&dir)?;
+    fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(dir.join(name))
+        .with_context(|| format!("could not open {name}"))
 }

@@ -10,7 +10,7 @@ mod tracker;
 #[cfg(windows)]
 mod tray;
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use clap::{Parser, Subcommand};
 use config::Config;
 use focus::{run_session, SessionConfig};
@@ -57,7 +57,7 @@ fn main() -> Result<()> {
         hosts::clear();
         std::process::exit(130);
     });
-    match Cli::parse().command {
+    let result = match Cli::parse().command {
         Command::Login => login(),
         Command::Focus {
             minutes,
@@ -67,17 +67,54 @@ fn main() -> Result<()> {
         } => focus_cmd(minutes, cycles, break_min, block_sites),
         Command::Run => run_cmd(),
         Command::Status => status_cmd(),
+    };
+    if let Err(e) = &result {
+        log_error(e);
+    }
+    result
+}
+
+/// Append an error to agent.log — the `run` agent is hidden, so stderr goes nowhere.
+fn log_error(e: &anyhow::Error) {
+    let Ok(path) = Config::log_path() else { return };
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        let _ = writeln!(
+            file,
+            "{} {e:#}",
+            chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
+        );
     }
 }
 
 /// Refresh the access token from the stored refresh token, persisting the rotated one.
+///
+/// Supabase rotates the refresh token on every use, so the refresh + save runs
+/// under a cross-process lock, starting from the token currently on disk (another
+/// agent process may have rotated it since this one loaded its config).
 pub(crate) fn authed(cfg: &mut Config) -> Result<Supabase> {
+    let _lock = Config::auth_lock()?;
+    if let Ok(disk) = Config::load() {
+        if disk.refresh_token.is_some() {
+            cfg.refresh_token = disk.refresh_token;
+        }
+    }
     let mut sb = Supabase::new(&cfg.supabase_url, &cfg.anon_key);
     let rt = cfg
         .refresh_token
         .clone()
         .context("not signed in — run `touchgrass-agent login`")?;
-    let session = sb.refresh(&rt)?;
+    let session = sb.refresh(&rt).map_err(|e| {
+        let text = e.to_string();
+        if text.contains("refresh_token_already_used") || text.contains("refresh_token_not_found") {
+            anyhow!("sign-in expired — run `touchgrass-agent login` again")
+        } else {
+            e
+        }
+    })?;
     cfg.refresh_token = Some(session.refresh_token);
     cfg.save()?;
     sb.set_access(session.access_token);
@@ -163,11 +200,29 @@ pub(crate) fn resolve_policy(sb: &Supabase, cfg: &Config) -> supabase::Policy {
 }
 
 fn run_cmd() -> Result<()> {
+    // One watcher at a time — a second would race the first for the session token.
+    let Some(_run_lock) = Config::try_run_lock()? else {
+        bail!("another TouchGrass agent is already running");
+    };
     let mut cfg = Config::load()?;
     // Validate we can auth before entering the watch loop.
-    authed(&mut cfg)?;
+    if let Err(e) = authed(&mut cfg) {
+        alert_startup_failure(&e);
+        return Err(e);
+    }
     hosts::clear(); // drop any stale block left by a previous unclean exit
     run_watch(cfg)
+}
+
+/// The `run` agent has no console, so show a startup failure on screen (and in
+/// the Action Center) instead of exiting silently.
+fn alert_startup_failure(e: &anyhow::Error) {
+    let msg = format!("{e:#}");
+    notify::toast("TouchGrass agent couldn't start", &msg);
+    let _ = overlay::run_blocking(move || {
+        overlay::banner("TouchGrass agent couldn't start", &msg, overlay::Tone::Bad);
+        Ok(())
+    });
 }
 
 /// On Windows, run under a tray icon (Status / Stop); elsewhere just watch.

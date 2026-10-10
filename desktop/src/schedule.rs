@@ -34,6 +34,11 @@ pub fn watch(cfg: &mut Config) -> Result<()> {
                 }
                 Err(e) => {
                     eprintln!("re-auth failed: {e}");
+                    crate::overlay::banner(
+                        "TouchGrass can't reach your account",
+                        &format!("{e:#}"),
+                        crate::overlay::Tone::Bad,
+                    );
                     sleep(Duration::from_secs(60));
                     continue;
                 }
