@@ -134,6 +134,10 @@ interface PointsDao {
 
     @Query("SELECT COALESCE(SUM(delta), 0) FROM points_ledger WHERE delta > 0")
     fun lifetimeEarned(): Flow<Int>
+
+    /** Ledger rows with exactly this [reason] — makes keyed charges idempotent. */
+    @Query("SELECT COUNT(*) FROM points_ledger WHERE reason = :reason")
+    suspend fun countByReason(reason: String): Int
 }
 
 @Dao

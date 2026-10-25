@@ -7,7 +7,8 @@ import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
-import com.example.touchgrass.isAccessibilityEnabled
+import com.example.touchgrass.core.discipline.AccessibilityOffBilling
+import com.example.touchgrass.core.service.AccessibilityOffTracker
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 import java.util.concurrent.TimeUnit
@@ -26,22 +27,32 @@ import java.util.concurrent.TimeUnit
 class ServiceReminderWorker @AssistedInject constructor(
     @Assisted appContext: Context,
     @Assisted params: WorkerParameters,
-    private val notifier: Notifier
+    private val notifier: Notifier,
+    private val offTracker: AccessibilityOffTracker
 ) : CoroutineWorker(appContext, params) {
 
     override suspend fun doWork(): Result {
-        if (isAccessibilityEnabled(applicationContext)) {
+        // The tracker reads the toggle itself, under its lock (no stale observations).
+        val tick = offTracker.onReminderTick()
+        if (!tick.off) {
             notifier.cancel(Notifier.Ids.ACCESSIBILITY_OFF)   // back on — end the loop
         } else {
             notifier.post(
                 channel = NotifChannel.REMINDERS,
                 id = Notifier.Ids.ACCESSIBILITY_OFF,
-                title = "Tracking is off",
-                body = "TouchGrass isn't watching. Tap to turn tracking back on."
+                title = "Tracking is off — you're losing points",
+                body = penaltyMessage(tick.charged)
             )
-            reschedule(applicationContext)                    // keep reminding while off
+            reschedule(applicationContext)                    // keep reminding (and billing) while off
         }
         return Result.success()
+    }
+
+    private fun penaltyMessage(charged: Int): String {
+        val rate = "−${AccessibilityOffBilling.POINTS_PER_TICK} pts every " +
+            "${AccessibilityOffBilling.TICK_MS / 60_000} min"
+        val soFar = if (charged > 0) " (−$charged pts so far)" else ""
+        return "$rate until TouchGrass is back on$soFar. Tap to turn it on."
     }
 
     companion object {

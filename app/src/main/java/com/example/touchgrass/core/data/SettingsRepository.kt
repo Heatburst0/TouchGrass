@@ -55,6 +55,8 @@ class SettingsRepository @Inject constructor(
         val SCHEDULED_PENDING = stringPreferencesKey("focus_scheduled_pending")
         val SYNC_FOCUS_TO_LAPTOP = booleanPreferencesKey("sync_focus_to_laptop")
         val BLOCK_SITES_ON_LAPTOP = booleanPreferencesKey("block_sites_on_laptop")
+        // Open "accessibility switched off" spell being billed ("" = none). JSON.
+        val ACCESS_OFF_STATE = stringPreferencesKey("access_off_state")
     }
 
     val shortsLimit: Flow<Int> = context.dataStore.data
@@ -266,6 +268,14 @@ class SettingsRepository @Inject constructor(
 
     suspend fun setReadingGatePending(pending: Boolean) {
         context.dataStore.edit { it[Keys.READING_GATE_PENDING] = pending }
+    }
+
+    /** The accessibility-off billing spell, as JSON ("" when none is open). */
+    suspend fun getAccessOffStateJson(): String =
+        context.dataStore.data.first()[Keys.ACCESS_OFF_STATE] ?: ""
+
+    suspend fun setAccessOffStateJson(json: String) {
+        context.dataStore.edit { it[Keys.ACCESS_OFF_STATE] = json }
     }
 
     companion object {

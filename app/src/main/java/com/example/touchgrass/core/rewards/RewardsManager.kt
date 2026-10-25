@@ -43,6 +43,30 @@ class RewardsManager @Inject constructor(
         Timber.tag("Rewards").i("Penalty: -%d shorts today", amount)
     }
 
+    /**
+     * Deduct [points]. Unlike spending, this may push the balance NEGATIVE: debt
+     * naturally blocks every purchase (they all require a positive balance) until
+     * it's earned back by reading / focus.
+     */
+    suspend fun penalize(points: Int, reason: String) {
+        if (points <= 0) return
+        pointsDao.insert(
+            PointsEntryEntity(delta = -points, reason = reason, createdAt = System.currentTimeMillis())
+        )
+        Timber.tag("Rewards").i("-%d pts (%s)", points, reason)
+    }
+
+    /**
+     * [penalize] at most once per unique [key] (stored as the ledger reason). Replaying
+     * the same key — after a crash between charging and checkpointing, say — is a no-op.
+     * Callers serialize their own calls. Returns true if this call charged.
+     */
+    suspend fun penalizeOnce(points: Int, key: String): Boolean {
+        if (points <= 0 || pointsDao.countByReason(key) > 0) return false
+        penalize(points, key)
+        return true
+    }
+
     suspend fun award(points: Int, reason: String) {
         pointsDao.insert(
             PointsEntryEntity(delta = points, reason = reason, createdAt = System.currentTimeMillis())

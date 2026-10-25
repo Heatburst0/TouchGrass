@@ -47,6 +47,9 @@ class InspectorService : AccessibilityService() {
     @Inject
     lateinit var focusSessionManager: FocusSessionManager
 
+    @Inject
+    lateinit var offTracker: AccessibilityOffTracker
+
     private var lastAnalysisTime = 0L
     private var lastGoalLockAt = 0L
     private var lastFocusBlockAt = 0L
@@ -61,9 +64,11 @@ class InspectorService : AccessibilityService() {
         super.onServiceConnected()
         Timber.tag("ShortsTracker").i("Service Connected & Ready")
 
-        // Tracking is back on — end the "tracking off" reminder loop.
+        // Tracking is back on — end the "tracking off" reminder loop and settle any
+        // points owed for the time it was switched off.
         ServiceReminderWorker.stop(this)
         notifier.cancel(Notifier.Ids.ACCESSIBILITY_OFF)
+        offTracker.onServiceUp()
 
         serviceScope.launch {
             trackerManager.triggerBlockEvent.collect {
@@ -178,6 +183,7 @@ class InspectorService : AccessibilityService() {
     override fun onUnbind(intent: Intent?): Boolean {
         // Service switched off (or unbound) — start the recurring reminder as soon
         // as it goes off, independent of opening the app.
+        offTracker.onServiceDown()
         ServiceReminderWorker.start(this)
         return super.onUnbind(intent)
     }
@@ -187,6 +193,7 @@ class InspectorService : AccessibilityService() {
         serviceScope.cancel()
         // Backstop in case onUnbind didn't fire. If the system rebinds, onServiceConnected
         // cancels this again (self-correcting), so a transient restart won't spam.
+        offTracker.onServiceDown()
         ServiceReminderWorker.start(this)
         Timber.tag("ShortsTracker").i("Service Destroyed")
     }
