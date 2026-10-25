@@ -52,51 +52,38 @@ class GoalOrchestrator @Inject constructor(
     }
 
     /** PUSH convenience: add [units] of verified progress to every active goal of
-     *  [type] (e.g. verified reading pages → every active reading goal). */
-    suspend fun reportProgress(type: GoalType, units: Int) {
+     *  [type] (e.g. verified reading pages → every active reading goal). An event
+     *  that [occurredAt] before a goal existed (e.g. history pulled by sync) never
+     *  counts toward it. */
+    suspend fun reportProgress(type: GoalType, units: Int, occurredAt: Long = System.currentTimeMillis()) {
         if (units <= 0) return
-        goalDao.activeOfType(type.name).forEach { goal ->
-            applyResult(goal, VerificationResult.Progress(units))
-        }
+        goalDao.activeOfType(type.name)
+            .filter { it.existedAt(occurredAt) }
+            .forEach { goal -> applyResult(goal, VerificationResult.Progress(units), occurredAt) }
     }
 
     /**
      * The single result → (progress, economy) mapping. ACHIEVE goals earn their
-     * reward when they reach target; any goal that Fails a cycle is docked its stake.
+     * reward once when they reach target (one-shots then close as MET); any goal
+     * that Fails a cycle is docked its stake.
      */
-    private suspend fun applyResult(goal: GoalEntity, result: VerificationResult) {
-        val recurring = goal.recurrence() != Recurrence.Once
-        when (result) {
-            is VerificationResult.Progress -> {
-                if (recurring) {
-                    val (updated, metNow) = goal.addRecurringProgress(result.amount)
-                    goalDao.upsert(updated)
-                    if (metNow) reward(goal, "goal_met:${goal.id}:period")
-                } else {
-                    val newProgress = goal.progress + result.amount
-                    if (newProgress >= goal.target) {
-                        goalDao.upsert(goal.copy(progress = goal.target))
-                        reward(goal, "goal_met:${goal.id}")
-                    } else {
-                        goalDao.upsert(goal.copy(progress = newProgress))
-                    }
-                }
-            }
-            VerificationResult.Passed -> {
-                if (recurring) {
-                    val (updated, metNow) = goal.addRecurringProgress(goal.target)
-                    goalDao.upsert(updated)
-                    if (metNow) reward(goal, "goal_passed:${goal.id}:period")
-                } else {
-                    goalDao.upsert(goal.copy(progress = maxOf(goal.progress, goal.target)))
-                    reward(goal, "goal_passed:${goal.id}")
-                }
-            }
+    private suspend fun applyResult(
+        goal: GoalEntity,
+        result: VerificationResult,
+        occurredAt: Long = System.currentTimeMillis()
+    ) {
+        val now = System.currentTimeMillis()
+        val update = when (result) {
+            is VerificationResult.Progress -> goal.applyProgress(result.amount, now, occurredAt)
+            VerificationResult.Passed -> goal.applyPassed(now, occurredAt)
             VerificationResult.Failed -> {
                 if (goal.penaltyShorts > 0) rewards.applyPenaltyShorts(goal.penaltyShorts)
+                GoalUpdate.NONE
             }
-            VerificationResult.NoChange -> Unit
+            VerificationResult.NoChange -> GoalUpdate.NONE
         }
+        update.goal?.let { goalDao.upsert(it) }
+        update.rewardReason?.let { reward(goal, it) }
     }
 
     private suspend fun reward(goal: GoalEntity, reason: String) {

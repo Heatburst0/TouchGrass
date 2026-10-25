@@ -1,7 +1,7 @@
 package com.example.touchgrass.features.focus
 
 import java.time.DayOfWeek
-import java.time.LocalDate
+import java.time.Instant
 import java.time.ZoneId
 
 /**
@@ -23,8 +23,14 @@ data class FocusSchedule(
     val cycles: Int,
     val blockedPackages: Set<String>,
     val reminders: Set<Int> = emptySet(),   // minutes-before to notify (e.g. 60, 5)
-    val enabled: Boolean
+    val enabled: Boolean,
+    /** IANA zone the [hour]:[minute] is expressed in (focus_schedules.timezone). */
+    val zoneId: String = ZoneId.systemDefault().id
 ) {
+    /** The schedule's zone, or the device's if the stored id isn't a valid zone. */
+    val zone: ZoneId
+        get() = runCatching { ZoneId.of(zoneId) }.getOrDefault(ZoneId.systemDefault())
+
     /** Whole session length including breaks. */
     val totalMinutes: Int get() = cycles * focusBlockMin + (cycles - 1).coerceAtLeast(0) * breakMin
 
@@ -36,10 +42,12 @@ data class FocusSchedule(
         strict = false
     )
 
-    /** Epoch millis of the next fire strictly after [now], or null if disabled. */
-    fun nextRunAt(now: Long, zone: ZoneId = ZoneId.systemDefault()): Long? {
+    /** Epoch millis of the next fire strictly after [now], or null if disabled.
+     *  [hour]:[minute] is read in the schedule's own [zone], and "today" comes
+     *  from [now] (not the wall clock) so the result is deterministic. */
+    fun nextRunAt(now: Long, zone: ZoneId = this.zone): Long? {
         if (!enabled) return null
-        val today = LocalDate.now(zone)
+        val today = Instant.ofEpochMilli(now).atZone(zone).toLocalDate()
         for (i in 0..8L) {
             val date = today.plusDays(i)
             val runs = days == null || date.dayOfWeek in days

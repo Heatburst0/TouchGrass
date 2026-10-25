@@ -148,7 +148,8 @@ class FocusScheduleRepository @Inject constructor(
                 cycles = cycles,
                 blockedPackages = config.blocked.toSet(),
                 reminders = config.reminders.toSet(),
-                enabled = enabled && target_platforms.contains("ANDROID")
+                enabled = enabled && target_platforms.contains("ANDROID"),
+                zoneId = timezone
             )
         }
 
@@ -158,7 +159,7 @@ class FocusScheduleRepository @Inject constructor(
             recurrence = if (days == null) RecurrenceJson("DAILY")
             else RecurrenceJson("CUSTOM", days.map { it.name }),
             start_local_time = "%02d:%02d".format(hour, minute),
-            timezone = java.time.ZoneId.systemDefault().id,
+            timezone = zoneId, // keep the zone the schedule was made in
             focus_block_min = focusBlockMin,
             break_min = breakMin,
             cycles = cycles,

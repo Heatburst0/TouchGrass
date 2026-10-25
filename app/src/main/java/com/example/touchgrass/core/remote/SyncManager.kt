@@ -2,8 +2,19 @@ package com.example.touchgrass.core.remote
 
 import com.example.touchgrass.core.data.db.FocusSessionDao
 import com.example.touchgrass.core.data.db.FocusSessionEntity
+import com.example.touchgrass.core.data.SettingsRepository
+import com.example.touchgrass.core.goals.GoalOrchestrator
+import com.example.touchgrass.core.goals.GoalType
 import com.example.touchgrass.core.sync.DeviceIdentity
 import com.example.touchgrass.di.ApplicationScope
+import com.example.touchgrass.features.focus.activeFocusFromJson
+import com.example.touchgrass.features.focus.insights.RecordMerger
+import androidx.room.withTransaction
+import com.example.touchgrass.core.data.db.TouchGrassDatabase
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlin.math.abs
 import com.example.touchgrass.features.focus.insights.SessionAppUsage
 import com.example.touchgrass.features.focus.insights.SessionSource
 import io.github.jan.supabase.SupabaseClient
@@ -76,9 +87,17 @@ class SyncManager @Inject constructor(
     private val deviceRegistrar: DeviceRegistrar,
     private val deviceIdentity: DeviceIdentity,
     private val focusSessionDao: FocusSessionDao,
+    private val orchestrator: GoalOrchestrator,
+    private val settings: SettingsRepository,
+    private val database: TouchGrassDatabase,
     @ApplicationScope private val scope: CoroutineScope
 ) {
     @Volatile private var watchersStarted = false
+
+    // Sign-in sync and the realtime/observer watchers can overlap. Serialize every push
+    // and pull: otherwise two pulls can both insert (and credit) the same session, or a
+    // pull can see our own just-pushed row before markSynced and insert a duplicate.
+    private val syncLock = Mutex()
 
     init {
         if (auth.isConfigured) {
@@ -103,7 +122,7 @@ class SyncManager @Inject constructor(
         pullFocusSessions()
     }
 
-    private suspend fun pushFocusSessions() {
+    private suspend fun pushFocusSessions() = syncLock.withLock {
         val deviceId = deviceIdentity.current().id
         focusSessionDao.unsynced().forEach { s ->
             val uid = s.uid.ifBlank { UUID.randomUUID().toString() }
@@ -125,7 +144,7 @@ class SyncManager @Inject constructor(
         }
     }
 
-    private suspend fun pullFocusSessions() {
+    private suspend fun pullFocusSessions() = syncLock.withLock {
         val remote = supabase.from("focus_sessions").select().decodeList<PulledFocusSession>()
         remote.forEach { r ->
             if (focusSessionDao.countByUid(r.id) > 0) {
@@ -135,24 +154,45 @@ class SyncManager @Inject constructor(
             }
             val started = OffsetDateTime.parse(r.started_at).toInstant().toEpochMilli()
             val ended = r.ended_at?.let { OffsetDateTime.parse(it).toInstant().toEpochMilli() } ?: started
-            focusSessionDao.insert(
-                FocusSessionEntity(
-                    startedAt = started,
-                    endedAt = ended,
-                    plannedFocusMin = r.planned_focus_min,
-                    focusedMin = r.focused_min,
-                    cycles = r.cycles,
-                    violations = r.violations,
-                    strict = r.strict,
-                    outcome = r.outcome,
-                    uid = r.id,
-                    synced = true,
-                    remote = true,
-                    source = r.source.name,
-                    appUsageJson = r.usageJson
-                )
+            // Decide before the transaction (it reads DataStore, not Room).
+            val credit = LaptopSessionCredit.shouldCredit(
+                source = r.source,
+                outcome = r.outcome,
+                endedAt = ended,
+                now = System.currentTimeMillis(),
+                pairedWithPhone = pairedWithPhoneSession(started)
             )
+            // Insert + credit atomically: a crash can't keep the row but lose the credit
+            // (or credit without the row, which would re-credit on the next pull).
+            database.withTransaction {
+                focusSessionDao.insert(r.toEntity(started, ended))
+                if (credit) orchestrator.reportProgress(GoalType.FOCUS_SESSION, 1, occurredAt = ended)
+            }
         }
+    }
+
+    private fun PulledFocusSession.toEntity(started: Long, ended: Long) = FocusSessionEntity(
+        startedAt = started,
+        endedAt = ended,
+        plannedFocusMin = planned_focus_min,
+        focusedMin = focused_min,
+        cycles = cycles,
+        violations = violations,
+        strict = strict,
+        outcome = outcome,
+        uid = id,
+        synced = true,
+        remote = true,
+        source = source.name,
+        appUsageJson = usageJson
+    )
+
+    /** True if this phone ran (or is running) the session a laptop one joined. */
+    private suspend fun pairedWithPhoneSession(laptopStart: Long): Boolean {
+        val tol = RecordMerger.PAIR_TOLERANCE_MS
+        if (focusSessionDao.countLocalStartedBetween(laptopStart - tol, laptopStart + tol) > 0) return true
+        val running = activeFocusFromJson(settings.activeFocusJson.first()) ?: return false
+        return abs(running.startAt - laptopStart) <= tol
     }
 
     private fun startWatchers() {

@@ -66,7 +66,16 @@ class GoalEngine @Inject constructor(
                 .map { it.toGoalView() }
         }.stateIn(scope, SharingStarted.Eagerly, emptyList())
 
-    init { scope.launch { migrateReadingPledgesToType(); settleOverdue(); settleRecurring() } }
+    // Repair BEFORE settling: a finished goal must not be marked MISSED and penalized.
+    init { scope.launch { migrateReadingPledgesToType(); repairStaleMetGoals(); settleOverdue(); settleRecurring() } }
+
+    /** Close one-shots the pre-fix orchestrator left ACTIVE at target (already paid,
+     *  so no reward). Idempotent — repaired rows no longer match. */
+    private suspend fun repairStaleMetGoals() {
+        goalDao.observeAll().first()
+            .mapNotNull { it.normalizedIfMet() }
+            .forEach { goalDao.upsert(it); Timber.tag("Goals").i("Repaired stale goal #%d -> MET", it.id) }
+    }
 
 
     fun createCommitment(
@@ -97,21 +106,14 @@ class GoalEngine @Inject constructor(
         scope.launch {
             settleOverdue(); settleRecurring()
             val now = System.currentTimeMillis()
-            goalDao.activeOfType(type.name)
-                .forEach { g ->
-                    if (g.recurrence() != Recurrence.Once) {
-                        val (updated, metNow) = g.addRecurringProgress(units)
-                        goalDao.upsert(updated)
-                        if (metNow) rewards.award(g.rewardPoints, "goal_met:${g.id}:period")
-                    } else {
-                        if ((g.deadlineAt ?: Long.MAX_VALUE) < now) return@forEach
-                        val np = g.progress + units
-                        if (np >= g.target) {
-                            goalDao.upsert(g.copy(progress = g.target).withStatus(CommitmentStatus.MET))
-                            rewards.award(g.rewardPoints, "commitment_met:${g.id}")
-                        } else goalDao.upsert(g.copy(progress = np))
-                    }
+            goalDao.activeOfType(type.name).forEach { g ->
+                // Same rule as the orchestrator: a met goal is never paid twice.
+                val update = g.applyProgress(units, now)
+                update.goal?.let { goalDao.upsert(it) }
+                if (update.rewardReason != null && g.rewardPoints > 0) {
+                    rewards.award(g.rewardPoints, update.rewardReason)
                 }
+            }
         }
     }
 

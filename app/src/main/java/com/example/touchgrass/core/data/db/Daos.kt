@@ -95,6 +95,11 @@ interface FocusSessionDao {
     @Query("SELECT COUNT(*) FROM focus_sessions WHERE uid = :uid")
     suspend fun countByUid(uid: String): Int
 
+    /** Sessions recorded on THIS phone that started in [from, to] — used to tell
+     *  whether a pulled laptop session is the other half of a synced session. */
+    @Query("SELECT COUNT(*) FROM focus_sessions WHERE remote = 0 AND startedAt BETWEEN :from AND :to")
+    suspend fun countLocalStartedBetween(from: Long, to: Long): Int
+
     /** Record which device a synced session ran on, and fill in its per-app
      *  breakdown if none is stored yet (never overwrites a captured one). */
     @Query(
