@@ -22,6 +22,7 @@ device_query = "2.1"
 active-win-pos-rs = "0.8"
 gethostname = "0.5"
 ctrlc = "3.4"
+chrono-tz = "0.10.4"
 
 [target.'cfg(windows)'.dependencies]
 tauri-winrt-notification = "0.8.1"

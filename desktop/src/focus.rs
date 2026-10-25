@@ -25,6 +25,27 @@ pub struct SessionConfig {
 const SAMPLE_SECS: i64 = 5;
 const REMOTE_CHECK_SECS: i64 = 15; // how often to re-check the shared active_sessions row
 const BLOCK_NOTICE_COOLDOWN_SECS: u64 = 60; // don't re-announce the same blocked app more often than this
+const MIN_PRODUCTIVE_FRACTION: f64 = 0.2;
+
+/// A full session must include a minimum amount of productive focus time.
+fn session_outcome(
+    ran_full_time: bool,
+    productive_secs: i64,
+    planned_focus_secs: i64,
+) -> &'static str {
+    let enough = planned_focus_secs <= 0
+        || productive_secs >= (planned_focus_secs as f64 * MIN_PRODUCTIVE_FRACTION).ceil() as i64;
+    if ran_full_time && enough {
+        "COMPLETED"
+    } else {
+        "ENDED_EARLY"
+    }
+}
+
+/// Whether the blocked-app announcement cooldown has elapsed.
+fn should_announce(last: Option<Instant>, now: Instant) -> bool {
+    last.is_none_or(|t| now.duration_since(t).as_secs() >= BLOCK_NOTICE_COOLDOWN_SECS)
+}
 
 /// Clears the hosts-file site block and hides the on-screen timer when dropped,
 /// so an early return or a panic never leaves sites null-routed or a stale HUD.
@@ -40,10 +61,7 @@ impl Drop for SessionGuard {
 /// spam while a blocked app stays in the foreground).
 fn block_notice(last: &mut HashMap<String, Instant>, app: &str, action: &str) {
     let now = Instant::now();
-    let fire = last
-        .get(app)
-        .is_none_or(|t| now.duration_since(*t).as_secs() >= BLOCK_NOTICE_COOLDOWN_SECS);
-    if fire {
+    if should_announce(last.get(app).copied(), now) {
         last.insert(app.to_string(), now);
         overlay::banner(
             &format!("{action}: {app}"),
@@ -107,7 +125,7 @@ pub fn run_session(sb: &Supabase, device_id: &str, cfg: &SessionConfig) -> Resul
     let mut by_app: HashMap<String, i64> = HashMap::new(); // productive seconds per app
     let mut off_app: HashMap<String, i64> = HashMap::new();
     let mut seen: HashSet<String> = HashSet::new(); // apps already reported this run
-    let mut outcome = "COMPLETED";
+    let mut ran_full_time = true;
     let mut remote_since = 0i64; // secs since last active_sessions check
 
     'session: for cycle in 1..=cfg.cycles {
@@ -138,7 +156,7 @@ pub fn run_session(sb: &Supabase, device_id: &str, cfg: &SessionConfig) -> Resul
                     if let Ok(Some(a)) = sb.get_active_session() {
                         if !a.active {
                             println!("Focus session ended from another device — stopping.");
-                            outcome = "ENDED_EARLY";
+                            ran_full_time = false;
                             break 'session;
                         }
                     }
@@ -203,6 +221,7 @@ pub fn run_session(sb: &Supabase, device_id: &str, cfg: &SessionConfig) -> Resul
     let ended = Utc::now();
     let focused_min = active_secs / 60;
     let planned = cfg.cycles * cfg.focus_min;
+    let outcome = session_outcome(ran_full_time, active_secs, planned * 60);
 
     sb.insert_focus_session(&RemoteFocusSession {
         id: uuid::Uuid::new_v4().to_string(),
@@ -235,4 +254,31 @@ pub fn run_session(sb: &Supabase, device_id: &str, cfg: &SessionConfig) -> Resul
         focused_min, planned, violations
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn outcome_requires_full_time_and_productivity() {
+        assert_eq!(session_outcome(true, 60, 100), "COMPLETED");
+        assert_eq!(session_outcome(true, 0, 100), "ENDED_EARLY");
+        assert_eq!(session_outcome(true, 20, 100), "COMPLETED");
+        assert_eq!(session_outcome(true, 20, 101), "ENDED_EARLY");
+        assert_eq!(session_outcome(true, 21, 101), "COMPLETED");
+        assert_eq!(session_outcome(false, 100, 100), "ENDED_EARLY");
+        assert_eq!(session_outcome(true, 0, 0), "COMPLETED");
+        assert_eq!(session_outcome(true, 0, -1), "COMPLETED");
+        assert_eq!(session_outcome(false, 0, 0), "ENDED_EARLY");
+    }
+
+    #[test]
+    fn announcements_respect_cooldown() {
+        let now = Instant::now();
+        assert!(should_announce(None, now));
+        assert!(!should_announce(Some(now), now + Duration::from_secs(59)));
+        assert!(should_announce(Some(now), now + Duration::from_secs(60)));
+        assert!(should_announce(Some(now), now + Duration::from_secs(61)));
+    }
 }

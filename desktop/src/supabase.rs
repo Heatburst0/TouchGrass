@@ -52,6 +52,8 @@ pub struct RemoteSchedule {
     #[serde(default)]
     pub start_local_time: String,
     #[serde(default)]
+    pub timezone: String,
+    #[serde(default)]
     pub focus_block_min: i64,
     #[serde(default)]
     pub break_min: i64,
