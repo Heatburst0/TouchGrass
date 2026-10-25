@@ -1,5 +1,6 @@
 package com.example.touchgrass.features.focus
 
+import com.example.touchgrass.features.weeklyplan.WeeklyPlanRepository
 import com.example.touchgrass.core.data.SettingsRepository
 import com.example.touchgrass.core.data.db.FocusSessionDao
 import com.example.touchgrass.core.data.db.FocusSessionEntity
@@ -47,6 +48,7 @@ class FocusSessionManager @Inject constructor(
     private val activeSessions: ActiveSessionRepository,
     private val usageEvents: UsageEventsSource,
     private val appCategories: AppCategoryLookup,
+    private val weeklyPlan: WeeklyPlanRepository,
     @ApplicationScope private val scope: CoroutineScope
 ) {
     @Volatile
@@ -69,8 +71,13 @@ class FocusSessionManager @Inject constructor(
     var violations = 0
         private set
 
-    fun start(config: FocusConfig, syncToLaptop: Boolean = false, blockSites: Boolean = false) {
+    fun start(requested: FocusConfig, syncToLaptop: Boolean = false, blockSites: Boolean = false) {
         violations = 0
+        // While the weekly plan is locked, every session (manual or scheduled) blocks at least its apps.
+        val plan = weeklyPlan.currentState()
+        val config = if (plan.locked) {
+            requested.copy(blockedPackages = requested.blockedPackages + plan.plan.blockedPackages)
+        } else requested
         if (syncToLaptop) {
             activeSessions.broadcast(config.focusBlockMin, config.breakMin, config.cycles, blockSites)
         }

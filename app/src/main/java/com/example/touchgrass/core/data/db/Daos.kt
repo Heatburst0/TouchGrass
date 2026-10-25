@@ -132,6 +132,10 @@ interface PointsDao {
     @Query("SELECT COALESCE(SUM(delta), 0) FROM points_ledger")
     fun balance(): Flow<Int>
 
+    /** Balance read straight from the ledger (not the async flow) for spend checks. */
+    @Query("SELECT COALESCE(SUM(delta), 0) FROM points_ledger")
+    suspend fun balanceNow(): Int
+
     @Query("SELECT COALESCE(SUM(delta), 0) FROM points_ledger WHERE delta > 0")
     fun lifetimeEarned(): Flow<Int>
 

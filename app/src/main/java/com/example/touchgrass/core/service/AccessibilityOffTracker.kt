@@ -8,6 +8,7 @@ import com.example.touchgrass.core.discipline.AccessibilityOffBilling
 import com.example.touchgrass.core.discipline.OffState
 import com.example.touchgrass.core.rewards.RewardsManager
 import com.example.touchgrass.di.ApplicationScope
+import com.example.touchgrass.features.weeklyplan.WeeklyPlanRepository
 import com.example.touchgrass.isAccessibilityEnabled
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
@@ -42,6 +43,7 @@ class AccessibilityOffTracker @Inject constructor(
     @ApplicationContext private val context: Context,
     private val settings: SettingsRepository,
     private val rewards: RewardsManager,
+    private val weeklyPlan: WeeklyPlanRepository,
     @ApplicationScope private val scope: CoroutineScope
 ) {
     /** What a reminder tick saw: whether tracking is off, and points charged this spell. */
@@ -91,6 +93,8 @@ class AccessibilityOffTracker @Inject constructor(
 
     private suspend fun bill(spell: Spell): Spell {
         val bill = AccessibilityOffBilling.bill(spell.state, bootCount(), elapsed())
+        // Guard switched off in the weekly plan: advance the checkpoint, charge nothing.
+        if (!weeklyPlan.plan.accessibilityPenaltyEnabled) return Spell(bill.state, spell.charged)
         var charged = 0
         val firstTick = bill.state.billedTicks - bill.newTicks + 1
         for (tick in firstTick..bill.state.billedTicks) {

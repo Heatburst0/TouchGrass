@@ -8,8 +8,13 @@ import com.example.touchgrass.core.goals.GoalEngine
 import com.example.touchgrass.core.manager.ShortsStats
 import com.example.touchgrass.core.manager.ShortsTrackerManager
 import com.example.touchgrass.core.rewards.RewardsManager
+import com.example.touchgrass.core.discipline.PlanField
 import com.example.touchgrass.features.github.GitHubGoalManager
+import com.example.touchgrass.features.weeklyplan.WeeklyPlanRepository
+import com.example.touchgrass.features.weeklyplan.WeeklyPlanState
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
@@ -20,7 +25,8 @@ class DashboardViewModel @Inject constructor(
     private val trackerManager: ShortsTrackerManager,
     rewards: RewardsManager,
     goalEngine: GoalEngine,
-    gitHubManager: GitHubGoalManager
+    gitHubManager: GitHubGoalManager,
+    private val weeklyPlanRepo: WeeklyPlanRepository
 ) : ViewModel() {
     val stats: StateFlow<ShortsStats> = trackerManager.stats
 
@@ -42,11 +48,28 @@ class DashboardViewModel @Inject constructor(
     val testMode: StateFlow<Boolean> = trackerManager.testMode
     val testCount: StateFlow<Int> = trackerManager.testCount
 
+    /** Weekly plan lock — drives the lock badge next to the Shorts limit. */
+    val weeklyPlan: StateFlow<WeeklyPlanState> = weeklyPlanRepo.state
+
+    /** Refused changes (loosening while the weekly plan is locked) for a snackbar. */
+    val lockMessage = MutableStateFlow<String?>(null)
+
+    /** Goes through the weekly plan: lowering always works; raising waits for the weekend. */
     fun updateShortsLimit(newLimit: Int) {
-        trackerManager.updateShortsLimit(newLimit)
+        viewModelScope.launch {
+            val result = weeklyPlanRepo.update { it.copy(shortsDailyLimit = newLimit) }
+            if (PlanField.SHORTS_LIMIT in result.refused) {
+                lockMessage.value = "Locked by your weekly plan — you can lower it, not raise it."
+            }
+        }
     }
 
+    /** Test mode stops real counting and blocking, so it can't be turned on while locked. */
     fun setTestMode(enabled: Boolean) {
+        if (enabled && weeklyPlanRepo.currentState().locked) {
+            lockMessage.value = "Test mode is off while your weekly plan is locked."
+            return
+        }
         trackerManager.setTestMode(enabled)
     }
 }

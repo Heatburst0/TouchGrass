@@ -1,5 +1,8 @@
 package com.example.touchgrass.presentation.dashboard
 
+import com.example.touchgrass.core.discipline.PlanField
+import com.example.touchgrass.features.weeklyplan.ui.LockMessageToast
+import com.example.touchgrass.features.weeklyplan.ui.WeeklyLockBadge
 import android.content.Intent
 import android.net.Uri
 import android.provider.Settings
@@ -83,7 +86,7 @@ import kotlin.math.roundToInt
 private val CardShape = RoundedCornerShape(20.dp)
 
 @Composable
-fun DoomscrollDashboard(viewModel: DashboardViewModel) {
+fun DoomscrollDashboard(viewModel: DashboardViewModel, onOpenWeeklyPlan: () -> Unit = {}) {
     val stats by viewModel.stats.collectAsState()
     val limit by viewModel.shortsLimit.collectAsState()
     val effectiveLimit by viewModel.effectiveLimit.collectAsState()
@@ -94,6 +97,9 @@ fun DoomscrollDashboard(viewModel: DashboardViewModel) {
     val activeCommitments by viewModel.activeCommitments.collectAsState()
     val testMode by viewModel.testMode.collectAsState()
     val testCount by viewModel.testCount.collectAsState()
+    val weeklyPlan by viewModel.weeklyPlan.collectAsState()
+    val lockMessage by viewModel.lockMessage.collectAsState()
+    LockMessageToast(lockMessage) { viewModel.lockMessage.value = null }
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
 
@@ -248,8 +254,14 @@ fun DoomscrollDashboard(viewModel: DashboardViewModel) {
         }
 
         // ---- Daily limit control (persisted via DataStore) ----
+        if (weeklyPlan.locked) {
+            WeeklyLockBadge(weeklyPlan, onClick = onOpenWeeklyPlan, modifier = Modifier.align(Alignment.Start))
+            Spacer(Modifier.height(6.dp))
+        }
         LimitCard(
             limit = limit,
+            // Locked: raising waits for the weekend (or a paid unlock), so cap at today's value.
+            maxLimit = if (weeklyPlan.locked && PlanField.SHORTS_LIMIT !in weeklyPlan.readyUnlocks) limit else MAX_LIMIT,
             onLimitChange = { viewModel.updateShortsLimit(it) }
         )
 
@@ -487,8 +499,10 @@ private fun GoalRow(title: String, detail: String, trailing: String, trailingOk:
     }
 }
 
+private const val MAX_LIMIT = 50
+
 @Composable
-private fun LimitCard(limit: Int, onLimitChange: (Int) -> Unit) {
+private fun LimitCard(limit: Int, maxLimit: Int, onLimitChange: (Int) -> Unit) {
     // Draft state while dragging; committed (and persisted) on release
     var draft by remember(limit) { mutableFloatStateOf(limit.toFloat()) }
 
@@ -528,14 +542,14 @@ private fun LimitCard(limit: Int, onLimitChange: (Int) -> Unit) {
                     textAlign = TextAlign.Center,
                     modifier = Modifier.width(52.dp)
                 )
-                RoundStepButton("+", enabled = limit < 50) { onLimitChange(limit + 1) }
+                RoundStepButton("+", enabled = limit < maxLimit) { onLimitChange(limit + 1) }
             }
         }
         Slider(
             value = draft,
             onValueChange = { draft = it },
             onValueChangeFinished = { onLimitChange(draft.roundToInt()) },
-            valueRange = 1f..50f,
+            valueRange = 1f..maxOf(maxLimit, 2).toFloat(),
             colors = SliderDefaults.colors(
                 thumbColor = GrassGreen,
                 activeTrackColor = GrassGreen,

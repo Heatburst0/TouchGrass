@@ -1,5 +1,7 @@
 package com.example.touchgrass.core.rewards
 
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.Mutex
 import com.example.touchgrass.core.data.SettingsRepository
 import com.example.touchgrass.core.data.db.PointsDao
 import com.example.touchgrass.core.data.db.PointsEntryEntity
@@ -67,6 +69,22 @@ class RewardsManager @Inject constructor(
         return true
     }
 
+    /**
+     * Spend [points] if the balance covers it (debt blocks spending). Returns success.
+     * Check-and-debit is serialized against the ledger itself, so two purchases can't
+     * both pass on the same balance.
+     */
+    suspend fun spend(points: Int, reason: String): Boolean = spendLock.withLock {
+        if (points <= 0 || pointsDao.balanceNow() < points) return@withLock false
+        pointsDao.insert(
+            PointsEntryEntity(delta = -points, reason = reason, createdAt = System.currentTimeMillis())
+        )
+        Timber.tag("Rewards").i("Spent %d pts (%s)", points, reason)
+        true
+    }
+
+    private val spendLock = Mutex()
+
     suspend fun award(points: Int, reason: String) {
         pointsDao.insert(
             PointsEntryEntity(delta = points, reason = reason, createdAt = System.currentTimeMillis())
@@ -86,14 +104,7 @@ class RewardsManager @Inject constructor(
      * watch-time interval. Returns false if the balance is too low.
      */
     suspend fun redeemSkipReadingGate(): Boolean {
-        if (pointsBalance.value < SKIP_GATE_COST) return false
-        pointsDao.insert(
-            PointsEntryEntity(
-                delta = -SKIP_GATE_COST,
-                reason = "skip_reading_gate",
-                createdAt = System.currentTimeMillis()
-            )
-        )
+        if (!spend(SKIP_GATE_COST, "skip_reading_gate")) return false
         settings.setReadingGatePending(false)
         Timber.tag("Rewards").i("Spent %d pts to skip reading gate", SKIP_GATE_COST)
         return true
@@ -101,14 +112,7 @@ class RewardsManager @Inject constructor(
 
     /** Trades [SHORTS_UNLOCK_COST] points for [SHORTS_UNLOCK_AMOUNT] extra shorts today. */
     suspend fun redeemExtraShorts(): Boolean {
-        if (pointsBalance.value < SHORTS_UNLOCK_COST) return false
-        pointsDao.insert(
-            PointsEntryEntity(
-                delta = -SHORTS_UNLOCK_COST,
-                reason = "redeem_extra_shorts",
-                createdAt = System.currentTimeMillis()
-            )
-        )
+        if (!spend(SHORTS_UNLOCK_COST, "redeem_extra_shorts")) return false
         settings.addExtraShorts(SHORTS_UNLOCK_AMOUNT)
         Timber.tag("Rewards").i("Redeemed %d pts for +%d shorts", SHORTS_UNLOCK_COST, SHORTS_UNLOCK_AMOUNT)
         return true

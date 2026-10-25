@@ -82,6 +82,11 @@ import com.example.touchgrass.features.focus.insights.AppCategoryLookup
 import com.example.touchgrass.features.focus.insights.RecordItem
 import com.example.touchgrass.features.focus.insights.RecordMerger
 import com.example.touchgrass.features.focus.insights.UsageEventsSource
+import com.example.touchgrass.core.discipline.PlanField
+import com.example.touchgrass.features.weeklyplan.WeeklyPlanRepository
+import com.example.touchgrass.features.weeklyplan.WeeklyPlanState
+import com.example.touchgrass.features.weeklyplan.ui.LockMessageToast
+import com.example.touchgrass.features.weeklyplan.ui.WeeklyLockBadge
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -107,7 +112,8 @@ class FocusViewModel @Inject constructor(
     private val installedApps: InstalledApps,
     private val scheduleRepo: com.example.touchgrass.features.focus.FocusScheduleRepository,
     private val usageEvents: UsageEventsSource,
-    private val appCategories: AppCategoryLookup
+    private val appCategories: AppCategoryLookup,
+    private val weeklyPlanRepo: WeeklyPlanRepository
 ) : ViewModel() {
     val activeSession = manager.activeSession
     val rememberedBlocked = settings.focusBlockedPackages
@@ -142,10 +148,18 @@ class FocusViewModel @Inject constructor(
     /** Add a suggested app to the focus blocklist. */
     fun blockSuggested(pkg: String) {
         viewModelScope.launch {
-            val current = settings.focusBlockedPackages.first().ifEmpty { ScreenTimeNudger.WATCHED_PACKAGES }
-            settings.setFocusBlockedPackages(current + pkg)
+            // Adding a block is always allowed (it's stricter), even while locked.
+            weeklyPlanRepo.update { plan ->
+                plan.copy(blockedPackages = plan.blockedPackages.ifEmpty { ScreenTimeNudger.WATCHED_PACKAGES } + pkg)
+            }
         }
     }
+
+    /** Weekly plan lock — drives the lock badge on the blocklist. */
+    val weeklyPlan: StateFlow<WeeklyPlanState> = weeklyPlanRepo.state
+
+    /** Refused loosening while the weekly plan is locked, for a snackbar. */
+    val lockMessage = MutableStateFlow<String?>(null)
 
     /** "Not now": hide the current suggestions for this visit. */
     fun dismissSuggestions() {
@@ -173,8 +187,14 @@ class FocusViewModel @Inject constructor(
     fun endEarly() = manager.endEarly()
     fun clearToIdle() = manager.clearToIdle()
     fun settleIfComplete() = manager.settleIfComplete()
+    /** Goes through the weekly plan: adding apps always works; removing waits for the weekend. */
     fun saveBlocked(packages: Set<String>) {
-        viewModelScope.launch { settings.setFocusBlockedPackages(packages) }
+        viewModelScope.launch {
+            val result = weeklyPlanRepo.update { it.copy(blockedPackages = packages) }
+            if (PlanField.BLOCKED_APPS in result.refused) {
+                lockMessage.value = "Locked by your weekly plan — you can add apps, not remove them."
+            }
+        }
     }
     fun label(pkg: String): String = installedApps.label(pkg)
 
@@ -189,8 +209,12 @@ class FocusViewModel @Inject constructor(
 @Composable
 fun FocusScreen(
     onOpenLaptopRules: () -> Unit = {},
+    onOpenWeeklyPlan: () -> Unit = {},
     viewModel: FocusViewModel = hiltViewModel()
 ) {
+    val weeklyPlan by viewModel.weeklyPlan.collectAsState()
+    val lockMessage by viewModel.lockMessage.collectAsState()
+    LockMessageToast(lockMessage) { viewModel.lockMessage.value = null }
     val active by viewModel.activeSession.collectAsState()
     val syncToLaptop by viewModel.syncToLaptop.collectAsState(initial = false)
     val blockSites by viewModel.blockSitesOnLaptop.collectAsState(initial = false)
@@ -256,6 +280,11 @@ fun FocusScreen(
                 )
             })
             Spacer(Modifier.height(16.dp))
+        }
+
+        if (phase == FocusPhase.Idle && weeklyPlan.locked) {
+            WeeklyLockBadge(weeklyPlan, onClick = onOpenWeeklyPlan)
+            Spacer(Modifier.height(10.dp))
         }
 
         when (phase) {
@@ -512,7 +541,7 @@ private fun SetupCard(
 }
 
 @Composable
-private fun AppPickerDialog(
+internal fun AppPickerDialog(
     apps: List<AppInfo>,
     labelOf: (String) -> String,
     initiallySelected: Set<String>,

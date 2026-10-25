@@ -57,6 +57,8 @@ class SettingsRepository @Inject constructor(
         val BLOCK_SITES_ON_LAPTOP = booleanPreferencesKey("block_sites_on_laptop")
         // Open "accessibility switched off" spell being billed ("" = none). JSON.
         val ACCESS_OFF_STATE = stringPreferencesKey("access_off_state")
+        // Offline copy of the weekly plan + lock (server is the source of truth). JSON.
+        val WEEKLY_PLAN_CACHE = stringPreferencesKey("weekly_plan_cache")
     }
 
     val shortsLimit: Flow<Int> = context.dataStore.data
@@ -276,6 +278,14 @@ class SettingsRepository @Inject constructor(
 
     suspend fun setAccessOffStateJson(json: String) {
         context.dataStore.edit { it[Keys.ACCESS_OFF_STATE] = json }
+    }
+
+    /** The weekly plan's offline cache, as JSON ("" when none). */
+    suspend fun getWeeklyPlanCacheJson(): String =
+        context.dataStore.data.first()[Keys.WEEKLY_PLAN_CACHE] ?: ""
+
+    suspend fun setWeeklyPlanCacheJson(json: String) {
+        context.dataStore.edit { it[Keys.WEEKLY_PLAN_CACHE] = json }
     }
 
     companion object {

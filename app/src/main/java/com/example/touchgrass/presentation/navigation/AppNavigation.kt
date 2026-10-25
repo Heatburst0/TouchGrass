@@ -20,6 +20,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavType
+import com.example.touchgrass.features.weeklyplan.ui.WeeklyPlanScreen
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
@@ -49,6 +50,7 @@ object Routes {
     const val ACCOUNT = "account"
     const val LAPTOP_RULES = "laptop_rules"
     const val LIBRARY = "library"
+    const val WEEKLY_PLAN = "weekly_plan"
     const val READER = "reader/{bookId}"
     const val QUIZ = "quiz/{bookId}"
     fun reader(bookId: Long) = "reader/$bookId"
@@ -115,19 +117,28 @@ fun TouchGrassAppRoot(startRoute: String? = null) {
             modifier = Modifier.padding(padding)
         ) {
             composable(Routes.GUARD) {
-                DoomscrollDashboard(viewModel = hiltViewModel())
+                DoomscrollDashboard(
+                    viewModel = hiltViewModel(),
+                    onOpenWeeklyPlan = { navController.navigate(Routes.WEEKLY_PLAN) }
+                )
             }
             composable(Routes.GOALS) {
                 GoalsScreen()
             }
             composable(Routes.FOCUS) {
-                FocusScreen(onOpenLaptopRules = { navController.navigate(Routes.LAPTOP_RULES) })
+                FocusScreen(
+                    onOpenLaptopRules = { navController.navigate(Routes.LAPTOP_RULES) },
+                    onOpenWeeklyPlan = { navController.navigate(Routes.WEEKLY_PLAN) }
+                )
             }
             composable(Routes.LAPTOP_RULES) {
                 LaptopRulesScreen()
             }
             composable(Routes.TOOLS) {
                 ToolsHubScreen(onOpenRoute = { navController.navigate(it) })
+            }
+            composable(Routes.WEEKLY_PLAN) {
+                WeeklyPlanScreen()
             }
             composable(Routes.ACCOUNT) {
                 AccountScreen()

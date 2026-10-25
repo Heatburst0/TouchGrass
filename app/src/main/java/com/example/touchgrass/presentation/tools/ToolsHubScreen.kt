@@ -40,6 +40,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.app.NotificationManagerCompat
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.example.touchgrass.core.discipline.PlanField
+import com.example.touchgrass.features.weeklyplan.WeeklyPlanRepository
+import com.example.touchgrass.features.weeklyplan.WeeklyPlanState
+import com.example.touchgrass.features.weeklyplan.ui.LockMessageToast
+import com.example.touchgrass.features.weeklyplan.ui.WeeklyLockBadge
+import kotlinx.coroutines.flow.MutableStateFlow
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.ViewModel
@@ -78,6 +84,12 @@ data class ProductivityTool(
 
 val PRODUCTIVITY_TOOLS = listOf(
     ProductivityTool(
+        id = "weekly_plan",
+        title = "Weekly plan",
+        description = "Lock force read, Shorts limit, blocked apps and reading goals until the weekend",
+        route = "weekly_plan"
+    ),
+    ProductivityTool(
         id = "account",
         title = "Account & sync",
         description = "Sign in to sync focus, goals and points across your devices",
@@ -111,7 +123,8 @@ val PRODUCTIVITY_TOOLS = listOf(
 @HiltViewModel
 class ToolsHubViewModel @Inject constructor(
     rewards: RewardsManager,
-    private val settings: SettingsRepository
+    settings: SettingsRepository,
+    private val weeklyPlanRepo: WeeklyPlanRepository
 ) : ViewModel() {
     val points: StateFlow<Int> = rewards.pointsBalance
 
@@ -121,21 +134,34 @@ class ToolsHubViewModel @Inject constructor(
     val nudgeIntervalMinutes: StateFlow<Int> = settings.nudgeIntervalMinutes
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), SettingsRepository.DEFAULT_NUDGE_MINUTES)
 
+    /** Weekly plan lock — drives the lock badge on the force-read controls. */
+    val weeklyPlan: StateFlow<WeeklyPlanState> = weeklyPlanRepo.state
+
+    /** Refused loosening while the weekly plan is locked, for a snackbar. */
+    val lockMessage = MutableStateFlow<String?>(null)
+
+    // Both go through the weekly plan (which also disarms an owed gate when turned off).
     fun setForceRead(enabled: Boolean) {
         viewModelScope.launch {
-            settings.setReadingGateEnabled(enabled)
-            // Turning it off also disarms any gate currently owed
-            if (!enabled) settings.setReadingGatePending(false)
+            val result = weeklyPlanRepo.update { it.copy(forceReadEnabled = enabled) }
+            if (PlanField.FORCE_READ_ENABLED in result.refused) {
+                lockMessage.value = "Locked by your weekly plan — force read stays on until the weekend."
+            }
         }
     }
 
     fun setNudgeInterval(minutes: Int) {
-        viewModelScope.launch { settings.setNudgeIntervalMinutes(minutes) }
+        viewModelScope.launch {
+            val result = weeklyPlanRepo.update { it.copy(forceReadEveryMin = minutes) }
+            if (PlanField.FORCE_READ_INTERVAL in result.refused) {
+                lockMessage.value = "Locked by your weekly plan — you can shorten the interval, not lengthen it."
+            }
+        }
     }
 }
 
 /** Interval choices offered in the UI: label -> minutes of watch time. */
-private val NUDGE_INTERVAL_CHOICES = listOf("30m" to 30, "1h" to 60, "2h" to 120, "3h" to 180)
+internal val NUDGE_INTERVAL_CHOICES = listOf("30m" to 30, "1h" to 60, "2h" to 120, "3h" to 180)
 
 @Composable
 fun ToolsHubScreen(
@@ -145,6 +171,9 @@ fun ToolsHubScreen(
     val points by viewModel.points.collectAsState()
     val forceRead by viewModel.forceReadEnabled.collectAsState()
     val nudgeInterval by viewModel.nudgeIntervalMinutes.collectAsState()
+    val weeklyPlan by viewModel.weeklyPlan.collectAsState()
+    val lockMessage by viewModel.lockMessage.collectAsState()
+    LockMessageToast(lockMessage) { viewModel.lockMessage.value = null }
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
 
@@ -206,6 +235,10 @@ fun ToolsHubScreen(
                 onClick = { tool.route?.let(onOpenRoute) },
                 extraContent = if (tool.id == "nudges") {
                     {
+                        if (weeklyPlan.locked) {
+                            Spacer(Modifier.height(10.dp))
+                            WeeklyLockBadge(weeklyPlan, onClick = { onOpenRoute("weekly_plan") })
+                        }
                         Spacer(Modifier.height(12.dp))
                         // How much watch time triggers a nudge / force-read
                         Text(
