@@ -1,12 +1,15 @@
+mod autofocus;
 mod config;
 mod enforce;
 mod focus;
 mod hosts;
 mod notify;
 mod overlay;
+mod project;
 mod schedule;
 mod supabase;
 mod tracker;
+mod usage;
 #[cfg(windows)]
 mod tray;
 
@@ -177,6 +180,8 @@ fn focus_cmd(minutes: i64, cycles: i64, break_min: i64, block_sites: bool) -> Re
         block_sites,
         watch_remote_stop: false,
         broadcast: false,
+        label: None,
+        source: None,
     };
     // Pump Win32 messages on this thread so the on-screen timer can draw.
     overlay::run_blocking(move || run_session(&sb, &device_id, &scfg))

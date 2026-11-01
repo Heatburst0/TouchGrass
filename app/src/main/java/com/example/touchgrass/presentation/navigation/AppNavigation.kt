@@ -1,5 +1,6 @@
 package com.example.touchgrass.presentation.navigation
 
+import com.example.touchgrass.features.worktargets.ui.WorkTargetsScreen
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
@@ -51,6 +52,7 @@ object Routes {
     const val LAPTOP_RULES = "laptop_rules"
     const val LIBRARY = "library"
     const val WEEKLY_PLAN = "weekly_plan"
+    const val WORK_TARGETS = "work_targets"
     const val READER = "reader/{bookId}"
     const val QUIZ = "quiz/{bookId}"
     fun reader(bookId: Long) = "reader/$bookId"
@@ -128,6 +130,7 @@ fun TouchGrassAppRoot(startRoute: String? = null) {
             composable(Routes.FOCUS) {
                 FocusScreen(
                     onOpenLaptopRules = { navController.navigate(Routes.LAPTOP_RULES) },
+                    onOpenWorkTargets = { navController.navigate(Routes.WORK_TARGETS) },
                     onOpenWeeklyPlan = { navController.navigate(Routes.WEEKLY_PLAN) }
                 )
             }
@@ -138,7 +141,10 @@ fun TouchGrassAppRoot(startRoute: String? = null) {
                 ToolsHubScreen(onOpenRoute = { navController.navigate(it) })
             }
             composable(Routes.WEEKLY_PLAN) {
-                WeeklyPlanScreen()
+                WeeklyPlanScreen(onOpenWorkTargets = { navController.navigate(Routes.WORK_TARGETS) })
+            }
+            composable(Routes.WORK_TARGETS) {
+                WorkTargetsScreen()
             }
             composable(Routes.ACCOUNT) {
                 AccountScreen()

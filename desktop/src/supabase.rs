@@ -1,4 +1,5 @@
 use anyhow::{anyhow, Context, Result};
+use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -189,6 +190,45 @@ impl Supabase {
         json_ok(resp, "list schedules")
     }
 
+    /// Fetch enabled quota/auto-focus targets owned by the signed-in user.
+    pub fn list_work_targets(&self) -> Result<Vec<WorkTarget>> {
+        let resp = self
+            .http
+            .get(format!(
+                "{}/rest/v1/work_targets?select=*&enabled=eq.true",
+                self.url
+            ))
+            .header("apikey", &self.anon_key)
+            .header("Authorization", format!("Bearer {}", self.access()?))
+            .send()?;
+        json_ok(resp, "list work targets")
+    }
+
+    /// Atomically increment active app/project seconds for a local calendar day.
+    pub fn add_app_usage(
+        &self,
+        device_id: &str,
+        day: NaiveDate,
+        app: &str,
+        project: &str,
+        secs: i64,
+    ) -> Result<()> {
+        let resp = self
+            .http
+            .post(format!("{}/rest/v1/rpc/add_app_usage", self.url))
+            .header("apikey", &self.anon_key)
+            .header("Authorization", format!("Bearer {}", self.access()?))
+            .json(&json!({
+                "p_device_id": device_id,
+                "p_day": day.format("%Y-%m-%d").to_string(),
+                "p_app": app,
+                "p_project": project,
+                "p_seconds": secs,
+            }))
+            .send()?;
+        expect_ok(resp, "add app usage")
+    }
+
     fn get_one<T: for<'de> Deserialize<'de>>(&self, table: &str) -> Result<Option<T>> {
         let resp = self
             .http
@@ -254,6 +294,39 @@ pub struct Policy {
     pub blocked_sites: Vec<String>,
 }
 
+/// Work target defaults mirror the database migration, including older payloads.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct WorkTarget {
+    pub id: String,
+    pub label: String,
+    pub app_name: String,
+    pub project: Option<String>,
+    pub auto_focus: bool,
+    pub auto_focus_after_min: i64,
+    pub focus_min: i64,
+    pub block_sites: bool,
+    pub block_phone: bool,
+    pub enabled: bool,
+}
+
+impl Default for WorkTarget {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            label: String::new(),
+            app_name: String::new(),
+            project: None,
+            auto_focus: false,
+            auto_focus_after_min: 3,
+            focus_min: 50,
+            block_sites: true,
+            block_phone: true,
+            enabled: true,
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub struct ActiveSession {
     #[serde(default)]
@@ -295,5 +368,30 @@ fn json_ok<T: for<'de> Deserialize<'de>>(
             code,
             resp.text().unwrap_or_default()
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn work_target_missing_fields_use_database_defaults() {
+        let target: WorkTarget = serde_json::from_value(json!({})).unwrap();
+        assert!(target.id.is_empty() && target.label.is_empty() && target.app_name.is_empty());
+        assert!(target.project.is_none());
+        assert!(!target.auto_focus);
+        assert_eq!((target.auto_focus_after_min, target.focus_min), (3, 50));
+        assert!(target.enabled && target.block_sites && target.block_phone);
+        let target: WorkTarget = serde_json::from_value(json!({
+            "id": "target", "app_name": "code", "label": "Build",
+            "project": "TouchGrass", "auto_focus": true, "auto_focus_after_min": 2,
+            "focus_min": 25, "block_sites": false, "block_phone": false, "enabled": false,
+        }))
+        .unwrap();
+        assert!(target.auto_focus);
+        assert!(!target.enabled && !target.block_sites && !target.block_phone);
+        assert_eq!(target.project.as_deref(), Some("TouchGrass"));
+        assert_eq!((target.auto_focus_after_min, target.focus_min), (2, 25));
     }
 }

@@ -1,5 +1,11 @@
 package com.example.touchgrass.features.weeklyplan
 
+import com.example.touchgrass.core.goals.retiring
+import com.example.touchgrass.core.goals.scheduleTarget
+import com.example.touchgrass.core.goals.cancelRetire
+import com.example.touchgrass.core.goals.scheduleRetire
+import com.example.touchgrass.features.worktargets.WorkTargetsRepository
+import com.example.touchgrass.features.worktargets.AppTimeVerifier
 import android.content.Context
 import android.os.SystemClock
 import android.provider.Settings
@@ -81,6 +87,7 @@ class WeeklyPlanRepository @Inject constructor(
     private val shorts: ShortsTrackerManager,
     private val goalDao: GoalDao,
     private val rewards: RewardsManager,
+    private val workTargets: WorkTargetsRepository,
     @ApplicationScope private val scope: CoroutineScope
 ) {
     private val lock = Mutex()
@@ -252,14 +259,57 @@ class WeeklyPlanRepository @Inject constructor(
         settings.setNudgeIntervalMinutes(plan.forceReadEveryMin)
         settings.setFocusBlockedPackages(plan.blockedPackages)
         syncReadingGoal(plan.weeklyReadingPages)
+        syncQuotaGoals(plan.focusQuotaMinutes)
     }
+
+    /** One recurring weekly APP_TIME goal per quota (keyed by work-target id). */
+    private suspend fun syncQuotaGoals(quotas: Map<String, Int>) {
+        val labels = workTargets.targets.value.associate { it.id to it.label }
+        val existing = goalDao.observeAll().first()
+            .filter { it.active && it.type == GoalType.APP_TIME.name }
+            .associateBy { JSONObject(it.configJson).optString(AppTimeVerifier.CONFIG_TARGET_ID) }
+        // Removing or changing a quota takes effect when the week closes, so it can't
+        // dodge this week's penalty or earn this week's reward a second time.
+        existing.forEach { (id, goal) ->
+            if ((quotas[id] ?: 0) <= 0 && !goal.retiring()) goalDao.upsert(goal.scheduleRetire())
+        }
+        quotas.filterValues { it > 0 }.forEach { (id, minutes) ->
+            val title = "Weekly quota: ${labels[id] ?: "work target"}"
+            val goal = existing[id]
+            when {
+                goal == null -> {
+                    val created = newPledgeGoal(
+                        goalType = GoalType.APP_TIME, category = "Focus", unit = "min",
+                        title = title, target = minutes, deadlineAt = 0,
+                        reward = quotaReward(minutes), penalty = QUOTA_PENALTY_SHORTS,
+                        now = System.currentTimeMillis(), recurrence = Recurrence.Weekly
+                    )
+                    goalDao.upsert(
+                        created.copy(
+                            configJson = JSONObject(created.configJson)
+                                .put(AppTimeVerifier.CONFIG_TARGET_ID, id).toString()
+                        )
+                    )
+                }
+                else -> {
+                    val updated = goal.cancelRetire().scheduleTarget(minutes)
+                        .copy(title = title, rewardPoints = quotaReward(goal.target)) // reward follows the target in force
+                    if (updated != goal) goalDao.upsert(updated)
+                }
+            }
+        }
+    }
+
+    /** 10 pts per committed hour, at least 20 and at most 200. */
+    private fun quotaReward(minutes: Int) = (minutes / 6).coerceIn(QUOTA_REWARD_MIN, QUOTA_REWARD_MAX)
 
     /** Keep one recurring weekly READING goal in step with the plan's page target. */
     private suspend fun syncReadingGoal(pages: Int) {
         val existing = goalDao.observeAll().first()
             .firstOrNull { it.active && JSONObject(it.configJson).optBoolean(PLAN_GOAL_MARKER) }
+        // Edits to a running week take effect when it closes (no dodging this week's stake).
         when {
-            pages <= 0 -> existing?.let { goalDao.upsert(it.copy(active = false)) }
+            pages <= 0 -> existing?.let { goalDao.upsert(it.scheduleRetire()) }
             existing == null -> {
                 val goal = newPledgeGoal(
                     goalType = GoalType.READING, category = "Reading", unit = "pages",
@@ -269,8 +319,10 @@ class WeeklyPlanRepository @Inject constructor(
                 )
                 goalDao.upsert(goal.copy(configJson = JSONObject(goal.configJson).put(PLAN_GOAL_MARKER, true).toString()))
             }
-            existing.target != pages ->
-                goalDao.upsert(existing.copy(target = pages, title = "Weekly plan: read $pages pages"))
+            else -> {
+                val updated = existing.cancelRetire().scheduleTarget(pages)
+                if (updated != existing) goalDao.upsert(updated)
+            }
         }
     }
 
@@ -440,6 +492,9 @@ class WeeklyPlanRepository @Inject constructor(
     companion object {
         private const val PLAN_GOAL_MARKER = "weeklyPlan"
         private const val TICK_MS = 60_000L
+        private const val QUOTA_PENALTY_SHORTS = 5
+        private const val QUOTA_REWARD_MIN = 20
+        private const val QUOTA_REWARD_MAX = 200
         private const val LOCK_SPAN_MS = 5 * 24 * 60 * 60_000L // Mon 00:00 -> Sat 00:00
         private const val READING_GOAL_REWARD = 50
         private const val READING_GOAL_PENALTY_SHORTS = 5

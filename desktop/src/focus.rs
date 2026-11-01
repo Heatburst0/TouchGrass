@@ -1,7 +1,7 @@
 use crate::overlay::{self, Tone};
 use crate::supabase::{RemoteDeviceEvent, RemoteFocusSession, Supabase};
 use crate::tracker::Tracker;
-use crate::{enforce, hosts, notify};
+use crate::{enforce, hosts, notify, project, usage};
 use anyhow::Result;
 use chrono::Utc;
 use serde_json::json;
@@ -20,12 +20,48 @@ pub struct SessionConfig {
     pub block_sites: bool, // per-session gate: only null-route sites when the session asked for it
     pub watch_remote_stop: bool, // abort if the shared active_sessions row is cleared (e.g. phone ended it)
     pub broadcast: bool,         // upsert active_sessions so other devices start too
+    pub label: Option<String>,
+    pub source: Option<String>,
 }
 
 const SAMPLE_SECS: i64 = 5;
 const REMOTE_CHECK_SECS: i64 = 15; // how often to re-check the shared active_sessions row
 const BLOCK_NOTICE_COOLDOWN_SECS: u64 = 60; // don't re-announce the same blocked app more often than this
 const MIN_PRODUCTIVE_FRACTION: f64 = 0.2;
+
+/// Shared session metadata, including auto-focus attribution when supplied.
+fn broadcast_config(cfg: &SessionConfig) -> serde_json::Value {
+    let mut config = json!({
+        "focusBlockMin": cfg.focus_min, "breakMin": cfg.break_min,
+        "cycles": cfg.cycles, "blockSites": cfg.block_sites,
+        "blockPhone": cfg.broadcast,
+    });
+    if let Some(label) = &cfg.label {
+        config["label"] = json!(label);
+    }
+    if let Some(source) = &cfg.source {
+        config["source"] = json!(source);
+    }
+    config
+}
+
+/// The other device (same start time) can finish a few seconds before us and clear
+/// the shared row; a stop that close to the end is a completed session, not an early one.
+fn finished_with_other_device(remaining_secs: i64) -> bool {
+    remaining_secs <= NATURAL_END_SLACK_SECS
+}
+
+const NATURAL_END_SLACK_SECS: i64 = 120;
+
+/// A local-only auto session must not stop on a stale inactive shared row.
+fn remote_stop_requested(active: bool, observed_active: &mut bool) -> bool {
+    if active {
+        *observed_active = true;
+        false
+    } else {
+        *observed_active
+    }
+}
 
 /// A full session must include a minimum amount of productive focus time.
 fn session_outcome(
@@ -93,8 +129,7 @@ pub fn run_session(sb: &Supabase, device_id: &str, cfg: &SessionConfig) -> Resul
 
     let started = Utc::now();
     if cfg.broadcast {
-        let _ = sb.set_active_session(&started.to_rfc3339(), device_id,
-            json!({ "focusBlockMin": cfg.focus_min, "breakMin": cfg.break_min, "cycles": cfg.cycles, "blockSites": cfg.block_sites }));
+        let _ = sb.set_active_session(&started.to_rfc3339(), device_id, broadcast_config(cfg));
     }
 
     overlay::banner(
@@ -127,6 +162,8 @@ pub fn run_session(sb: &Supabase, device_id: &str, cfg: &SessionConfig) -> Resul
     let mut seen: HashSet<String> = HashSet::new(); // apps already reported this run
     let mut ran_full_time = true;
     let mut remote_since = 0i64; // secs since last active_sessions check
+    let mut remote_observed_active = cfg.broadcast || cfg.source.as_deref() != Some("AUTO");
+    let mut last_usage_flush = Instant::now();
 
     'session: for cycle in 1..=cfg.cycles {
         println!(
@@ -148,22 +185,33 @@ pub fn run_session(sb: &Supabase, device_id: &str, cfg: &SessionConfig) -> Resul
         while elapsed < block_secs {
             sleep(Duration::from_secs(SAMPLE_SECS as u64));
             elapsed += SAMPLE_SECS;
+            let active = tracker.sample_active();
+            let window = tracker.active_window_info();
+            let (app, pid) = (window.app, window.pid);
+            if active {
+                let project = project::parse_project(&app, &window.title);
+                usage::record(&app, project.as_deref(), SAMPLE_SECS);
+            }
+            if last_usage_flush.elapsed() >= Duration::from_secs(60) {
+                usage::flush(sb, device_id);
+                last_usage_flush = Instant::now();
+            }
             // Stop early if the session was ended from another device (e.g. the phone).
             if cfg.watch_remote_stop {
                 remote_since += SAMPLE_SECS;
                 if remote_since >= REMOTE_CHECK_SECS {
                     remote_since = 0;
                     if let Ok(Some(a)) = sb.get_active_session() {
-                        if !a.active {
+                        if remote_stop_requested(a.active, &mut remote_observed_active) {
                             println!("Focus session ended from another device — stopping.");
-                            ran_full_time = false;
+                            let remaining = (block_secs - elapsed)
+                                + (cfg.cycles - cycle) * (cfg.focus_min + cfg.break_min) * 60;
+                            ran_full_time = finished_with_other_device(remaining);
                             break 'session;
                         }
                     }
                 }
             }
-            let active = tracker.sample_active();
-            let (app, pid) = tracker.active_window();
             if !app.is_empty() && seen.insert(app.clone()) {
                 let _ = sb.upsert_device_app(device_id, &app, &app);
             }
@@ -209,10 +257,23 @@ pub fn run_session(sb: &Supabase, device_id: &str, cfg: &SessionConfig) -> Resul
                 "Look away from the screen and stretch.",
                 Tone::Warn,
             );
-            sleep(Duration::from_secs((cfg.break_min * 60) as u64));
+            for _ in 0..(cfg.break_min * 60 / SAMPLE_SECS) {
+                sleep(Duration::from_secs(SAMPLE_SECS as u64));
+                let active = tracker.sample_active();
+                let window = tracker.active_window_info();
+                if active {
+                    let project = project::parse_project(&window.app, &window.title);
+                    usage::record(&window.app, project.as_deref(), SAMPLE_SECS);
+                }
+                if last_usage_flush.elapsed() >= Duration::from_secs(60) {
+                    usage::flush(sb, device_id);
+                    last_usage_flush = Instant::now();
+                }
+            }
         }
     }
 
+    usage::flush(sb, device_id);
     hosts::clear();
     if cfg.broadcast {
         let _ = sb.clear_active_session();
@@ -261,6 +322,42 @@ mod tests {
     use super::*;
 
     #[test]
+    fn auto_broadcast_preserves_session_options_and_attribution() {
+        let cfg = SessionConfig {
+            focus_min: 50,
+            break_min: 0,
+            cycles: 1,
+            allowed_apps: vec![],
+            blocked_apps: vec![],
+            force_quit_apps: vec![],
+            blocked_sites: vec![],
+            block_sites: true,
+            watch_remote_stop: true,
+            broadcast: true,
+            label: Some("Build TouchGrass".into()),
+            source: Some("AUTO".into()),
+        };
+        assert_eq!(
+            broadcast_config(&cfg),
+            json!({
+                "focusBlockMin": 50, "breakMin": 0, "cycles": 1,
+                "blockSites": true, "blockPhone": true,
+                "source": "AUTO", "label": "Build TouchGrass",
+            })
+        );
+    }
+
+    #[test]
+    fn local_auto_ignores_stale_inactive_row_until_shared_activity() {
+        let mut observed = false;
+        assert!(!remote_stop_requested(false, &mut observed));
+        assert!(!remote_stop_requested(true, &mut observed));
+        assert!(remote_stop_requested(false, &mut observed));
+        // Joined and broadcast sessions already know the shared session exists.
+        assert!(remote_stop_requested(false, &mut true));
+    }
+
+    #[test]
     fn outcome_requires_full_time_and_productivity() {
         assert_eq!(session_outcome(true, 60, 100), "COMPLETED");
         assert_eq!(session_outcome(true, 0, 100), "ENDED_EARLY");
@@ -271,6 +368,14 @@ mod tests {
         assert_eq!(session_outcome(true, 0, 0), "COMPLETED");
         assert_eq!(session_outcome(true, 0, -1), "COMPLETED");
         assert_eq!(session_outcome(false, 0, 0), "ENDED_EARLY");
+    }
+
+    #[test]
+    fn remote_stop_near_the_end_counts_as_finished() {
+        assert!(finished_with_other_device(0));
+        assert!(finished_with_other_device(120));
+        assert!(!finished_with_other_device(121));
+        assert!(!finished_with_other_device(20 * 60));
     }
 
     #[test]

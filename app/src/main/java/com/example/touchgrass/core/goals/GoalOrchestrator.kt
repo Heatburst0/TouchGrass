@@ -1,5 +1,8 @@
 package com.example.touchgrass.core.goals
 
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.Mutex
 import com.example.touchgrass.core.data.db.GoalDao
 import com.example.touchgrass.core.data.db.GoalEntity
 import com.example.touchgrass.core.rewards.RewardsManager
@@ -31,18 +34,55 @@ class GoalOrchestrator @Inject constructor(
     private val rewards: RewardsManager
 ) {
 
+    /**
+     * Polled verify+apply runs one goal at a time on a fresh read: a background poll
+     * and a final check racing on the same goal would otherwise both credit the same
+     * minutes (and pay the reward twice). Push paths don't take it — they can run
+     * inside a Room transaction, where waiting on this lock could deadlock.
+     */
+    private val pollLock = Mutex()
+
     /** PULL: run every active goal whose verifier polls. */
     suspend fun runPolled() {
-        goalDao.observeActive().first().forEach { goal ->
-            val verifier = verifierFor(goal) ?: return@forEach
+        goalDao.observeActive().first().forEach { listed ->
+            val verifier = verifierFor(listed) ?: return@forEach
             if (verifier.cadence !is VerificationCadence.Polled) return@forEach
-            try {
-                applyResult(goal, verifier.verify(goal))
-            } catch (e: Exception) {
-                // Network/API/transient failure — leave state untouched, retry next run.
-                Timber.tag("Goals").w(e, "Polled verify failed for goal %d (%s)", goal.id, goal.type)
+            pollLock.withLock {
+                val goal = goalDao.byId(listed.id)?.takeIf { it.active } ?: return@withLock
+                try {
+                    applyResult(goal, verifier.verify(goal))
+                } catch (e: Exception) {
+                    if (e is CancellationException) throw e
+                    // Network/API/transient failure — leave state untouched, retry next run.
+                    Timber.tag("Goals").w(e, "Polled verify failed for goal %d (%s)", goal.id, goal.type)
+                }
             }
         }
+    }
+
+    /**
+     * Last look before a period closes: polled [goals] whose period has ended get one
+     * more verify, credited to that period, so work done just before the boundary
+     * (but after the last poll) still counts instead of being settled as missed.
+     * Returns the ids that couldn't be checked (offline/not signed in yet).
+     */
+    suspend fun finalCheck(goals: List<GoalEntity>): Set<Long> {
+        val unchecked = mutableSetOf<Long>()
+        goals.forEach { listed ->
+            val verifier = verifierFor(listed) ?: return@forEach
+            if (verifier.cadence !is VerificationCadence.Polled) return@forEach
+            pollLock.withLock {
+                val goal = goalDao.byId(listed.id) ?: return@withLock
+                try {
+                    applyResult(goal, verifier.verify(goal), occurredAt = goal.periodEndAt() - 1)
+                } catch (e: Exception) {
+                    if (e is CancellationException) throw e
+                    Timber.tag("Goals").w(e, "Final check failed for goal %d (%s)", goal.id, goal.type)
+                    unchecked += goal.id
+                }
+            }
+        }
+        return unchecked
     }
 
     /** PUSH: a live event reports a result for a specific goal. */

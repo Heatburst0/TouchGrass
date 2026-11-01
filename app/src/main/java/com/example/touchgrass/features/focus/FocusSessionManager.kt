@@ -71,7 +71,16 @@ class FocusSessionManager @Inject constructor(
     var violations = 0
         private set
 
-    fun start(requested: FocusConfig, syncToLaptop: Boolean = false, blockSites: Boolean = false) {
+    /**
+     * [startAt] defaults to now; joining a session another device started passes its
+     * real start, so the phase/end line up with that device (and the record pairs).
+     */
+    fun start(
+        requested: FocusConfig,
+        syncToLaptop: Boolean = false,
+        blockSites: Boolean = false,
+        startAt: Long = System.currentTimeMillis()
+    ) {
         violations = 0
         // While the weekly plan is locked, every session (manual or scheduled) blocks at least its apps.
         val plan = weeklyPlan.currentState()
@@ -82,7 +91,7 @@ class FocusSessionManager @Inject constructor(
             activeSessions.broadcast(config.focusBlockMin, config.breakMin, config.cycles, blockSites)
         }
         scope.launch {
-            val active = ActiveFocus(System.currentTimeMillis(), config)
+            val active = ActiveFocus(startAt, config)
             settings.setActiveFocusJson(active.toJson())
             scheduler.scheduleEnd(active.endAt)
             notifier.postFocusCountdown(

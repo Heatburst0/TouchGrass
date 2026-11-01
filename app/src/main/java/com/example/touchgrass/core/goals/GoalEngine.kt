@@ -1,5 +1,7 @@
 package com.example.touchgrass.core.goals
 
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.Mutex
 import com.example.touchgrass.core.data.db.CommitmentEntity
 import com.example.touchgrass.core.data.db.GoalDao
 import com.example.touchgrass.core.rewards.RewardsManager
@@ -28,6 +30,7 @@ import javax.inject.Singleton
 class GoalEngine @Inject constructor(
     private val goalDao: GoalDao,
     private val rewards: RewardsManager,
+    private val orchestrator: GoalOrchestrator,
     @ApplicationScope private val scope: CoroutineScope
 ) {
     /** Goal types the Goals screen renders as "pledges": manual TASK goals and
@@ -131,7 +134,12 @@ class GoalEngine @Inject constructor(
             }
     }
 
-    suspend fun settleRecurring() {
+    /**
+     * Judge and roll every recurring goal whose period has ended. Serialized: the app
+     * start, resume and the background worker can all call this at once, and two runs
+     * must never judge (or pay) the same period twice.
+     */
+    suspend fun settleRecurring() = settleLock.withLock {
         val now = System.currentTimeMillis()
         val zone = java.time.ZoneId.systemDefault()
         // Every recurring goal, of any type (reading Tasks AND GitHub commits).
@@ -148,9 +156,25 @@ class GoalEngine @Inject constructor(
                 var guard = 0
                 while (g.periodEndAt() in 1..now && guard < 370) {
                     if (!g.metThisPeriod()) {
+                        // Polled goals (e.g. weekly app-time quotas) get a last verify of
+                        // THIS period before it's judged, so late work isn't missed.
+                        val unchecked = orchestrator.finalCheck(listOf(g))
+                        // Couldn't check (offline / signing in): judge later — unless it's
+                        // waited long enough that holding it open would dodge the penalty.
+                        if (g.id in unchecked && g.periodEndAt() > now - FINAL_CHECK_GRACE_MS) break
+                        g = goalDao.byId(g.id) ?: g
+                    }
+                    if (!g.metThisPeriod()) {
                         rewards.applyPenaltyShorts(g.penaltyShorts)
                         g = g.withRecurringState(streak = 0)
                     }
+                    // Edits made during the period (new target, removal) start now.
+                    val changed = g.applyScheduledChanges()
+                    if (changed == null) {
+                        goalDao.upsert(g.copy(active = false))
+                        break
+                    }
+                    g = changed
                     // A met period keeps its streak (already counted at meet-time); just roll.
                     val endDate = java.time.Instant.ofEpochMilli(g.periodEndAt())
                         .atZone(zone).toLocalDate()
@@ -173,6 +197,10 @@ class GoalEngine @Inject constructor(
             .forEach { goalDao.upsert(it.copy(type = GoalType.READING.name)) }
     }
 
+    private val settleLock = Mutex()
 
-
+    private companion object {
+        /** How long a polled goal may wait for its final check before it's settled anyway. */
+        const val FINAL_CHECK_GRACE_MS = 3 * 24 * 60 * 60_000L
+    }
 }

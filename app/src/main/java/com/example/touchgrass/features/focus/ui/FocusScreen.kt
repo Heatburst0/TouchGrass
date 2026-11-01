@@ -209,6 +209,7 @@ class FocusViewModel @Inject constructor(
 @Composable
 fun FocusScreen(
     onOpenLaptopRules: () -> Unit = {},
+    onOpenWorkTargets: () -> Unit = {},
     onOpenWeeklyPlan: () -> Unit = {},
     viewModel: FocusViewModel = hiltViewModel()
 ) {
@@ -297,6 +298,7 @@ fun FocusScreen(
                 onSetSyncToLaptop = viewModel::setSyncToLaptop,
                 onSetBlockSites = viewModel::setBlockSites,
                 onOpenLaptopRules = onOpenLaptopRules,
+                onOpenWorkTargets = onOpenWorkTargets,
                 onStart = { cfg, sync, block -> viewModel.start(cfg, sync, block) },
                 onSaveBlocked = { viewModel.saveBlocked(it) }
             )
@@ -359,6 +361,7 @@ private fun SetupCard(
     onSetSyncToLaptop: (Boolean) -> Unit,
     onSetBlockSites: (Boolean) -> Unit,
     onOpenLaptopRules: () -> Unit,
+    onOpenWorkTargets: () -> Unit,
     onStart: (FocusConfig, Boolean, Boolean) -> Unit,
     onSaveBlocked: (Set<String>) -> Unit
 ) {
@@ -496,6 +499,18 @@ private fun SetupCard(
             ) {
                 Text("Laptop rules", color = TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
                 Text("apps & sites  ›", color = GrassGreen, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+            }
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .clickable { onOpenWorkTargets() }
+                    .padding(vertical = 6.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("Work targets", color = TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                Text("quotas & auto-focus  ›", color = GrassGreen, fontSize = 14.sp, fontWeight = FontWeight.Bold)
             }
         }
 

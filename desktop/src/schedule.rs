@@ -1,6 +1,7 @@
 use crate::config::Config;
 use crate::focus::{run_session, SessionConfig};
-use crate::supabase::{Policy, RemoteSchedule};
+use crate::supabase::{Policy, RemoteSchedule, WorkTarget};
+use crate::{autofocus::AutoFocus, overlay, project, tracker::Tracker, usage};
 use anyhow::Result;
 use chrono::{
     DateTime, Datelike, Duration as ChronoDuration, Local, NaiveTime, TimeZone, Utc, Weekday,
@@ -11,9 +12,11 @@ use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 const POLL_SECS: u64 = 20;
+const SAMPLE_SECS: u64 = 5;
+const SYNC_SECS: u64 = 60;
 
-/// Poll DESKTOP schedules and auto-start sessions when due. Re-fetches (and
-/// re-auths) in ≤5-min chunks so edits are picked up and the token stays fresh.
+/// Sample activity every five seconds; poll schedules/policy separately and
+/// sync usage/targets each minute. Sessions take over sampling while they run.
 pub fn watch(cfg: &mut Config) -> Result<()> {
     let device_id = cfg.device_id_or_new()?;
     let name = gethostname::gethostname().to_string_lossy().to_string();
@@ -23,101 +26,204 @@ pub fn watch(cfg: &mut Config) -> Result<()> {
     let _ = sb.upsert_device(&device_id, &name);
     let mut last_auth = Instant::now();
     let mut handled_live: Option<String> = None;
-    let tracker = crate::tracker::Tracker::new();
+    let mut tracker = Tracker::new();
     let mut seen_apps: HashSet<String> = HashSet::new();
+    let mut pending_apps: HashSet<String> = HashSet::new();
+    let started = Instant::now();
+    let mut last_poll: Option<Instant> = None;
+    let mut last_sync: Option<Instant> = None;
+    let mut policy = Policy::default();
+    let mut targets: Vec<WorkTarget> = Vec::new();
+    let mut autofocus = AutoFocus::default();
+    let mut pending_schedule: Option<(DateTime<Utc>, String, SessionConfig)> = None;
 
     loop {
-        // Access tokens expire (~1h); re-auth periodically.
-        if last_auth.elapsed() >= Duration::from_secs(25 * 60) {
-            match crate::authed(cfg) {
-                Ok(c) => {
-                    sb = c;
-                    last_auth = Instant::now();
-                    let _ = sb.upsert_device(&device_id, &name);
+        sleep(Duration::from_secs(SAMPLE_SECS));
+        let active = tracker.sample_active();
+        let window = tracker.active_window_info();
+        let project = project::parse_project(&window.app, &window.title);
+        if active {
+            usage::record(&window.app, project.as_deref(), SAMPLE_SECS as i64);
+        }
+        if !window.app.is_empty() && !seen_apps.contains(&window.app) {
+            pending_apps.insert(window.app.clone());
+        }
+
+        if last_sync.is_none_or(|at| at.elapsed() >= Duration::from_secs(SYNC_SECS)) {
+            last_sync = Some(Instant::now());
+            usage::flush(&sb, &device_id);
+            match sb.list_work_targets() {
+                Ok(list) => targets = list,
+                Err(e) => eprintln!("work targets sync: {e}"), // retain last good list
+            }
+        }
+
+        // Keep sampling during the wait for an imminent scheduled session.
+        if pending_schedule
+            .as_ref()
+            .is_some_and(|(at, _, _)| *at <= Utc::now())
+        {
+            let (_, title, scfg) = pending_schedule.take().unwrap();
+            println!("Starting scheduled \"{title}\"…");
+            if let Err(e) = run_session(&sb, &device_id, &scfg) {
+                eprintln!("session failed: {e}");
+            }
+            autofocus.session_finished(started.elapsed().as_secs() as i64);
+            tracker = Tracker::new();
+            continue;
+        }
+
+        if last_poll.is_none_or(|at| at.elapsed() >= Duration::from_secs(POLL_SECS)) {
+            last_poll = Some(Instant::now());
+            // Access tokens expire (~1h); re-auth periodically.
+            if last_auth.elapsed() >= Duration::from_secs(25 * 60) {
+                match crate::authed(cfg) {
+                    Ok(c) => {
+                        sb = c;
+                        last_auth = Instant::now();
+                        let _ = sb.upsert_device(&device_id, &name);
+                    }
+                    Err(e) => {
+                        eprintln!("re-auth failed: {e}");
+                        crate::overlay::banner(
+                            "TouchGrass can't reach your account",
+                            &format!("{e:#}"),
+                            crate::overlay::Tone::Bad,
+                        );
+                    }
                 }
-                Err(e) => {
-                    eprintln!("re-auth failed: {e}");
-                    crate::overlay::banner(
-                        "TouchGrass can't reach your account",
-                        &format!("{e:#}"),
-                        crate::overlay::Tone::Bad,
-                    );
-                    sleep(Duration::from_secs(60));
+            }
+
+            policy = crate::resolve_policy(&sb, cfg);
+
+            // Passively discover foreground apps so the phone's rules picker fills in
+            // even before any session runs.
+            pending_apps.retain(|app| {
+                if sb.upsert_device_app(&device_id, app, app).is_ok() {
+                    seen_apps.insert(app.clone());
+                    false
+                } else {
+                    true
+                }
+            });
+
+            // 1) A live session started on another device (phone "sync to laptop").
+            if let Ok(Some(a)) = sb.get_active_session() {
+                if a.active
+                    && a.started_at.is_some()
+                    && a.started_at != handled_live
+                    && a.origin_device_id.as_deref() != Some(device_id.as_str())
+                {
+                    handled_live = a.started_at.clone();
+                    println!("Joining a live focus session started on another device…");
+                    let scfg = session_from_config(&a.config, &policy);
+                    if let Err(e) = run_session(&sb, &device_id, &scfg) {
+                        eprintln!("live session failed: {e}");
+                    }
+                    autofocus.session_finished(started.elapsed().as_secs() as i64);
+                    tracker = Tracker::new();
+                    pending_schedule = None;
                     continue;
                 }
             }
-        }
 
-        let policy = crate::resolve_policy(&sb, cfg);
+            // 2) Scheduled DESKTOP sessions.
+            let now = Utc::now();
+            let schedules = sb.list_schedules().unwrap_or_default();
+            let next = schedules
+                .iter()
+                .filter(|s| {
+                    s.enabled
+                        && s.target_platforms
+                            .iter()
+                            .any(|p| p.eq_ignore_ascii_case("DESKTOP"))
+                })
+                .filter_map(|s| next_run_utc(s, now).map(|t| (t, s)))
+                .min_by_key(|(t, _)| *t);
 
-        // Passively discover foreground apps so the phone's rules picker fills in
-        // even before any session runs.
-        let (fg_app, _) = tracker.active_window();
-        if !fg_app.is_empty() && seen_apps.insert(fg_app.clone()) {
-            let _ = sb.upsert_device_app(&device_id, &fg_app, &fg_app);
-        }
-
-        // 1) A live session started on another device (phone "sync to laptop").
-        if let Ok(Some(a)) = sb.get_active_session() {
-            if a.active
-                && a.started_at.is_some()
-                && a.started_at != handled_live
-                && a.origin_device_id.as_deref() != Some(device_id.as_str())
-            {
-                handled_live = a.started_at.clone();
-                println!("Joining a live focus session started on another device…");
-                let scfg = session_from_config(&a.config, &policy);
-                if let Err(e) = run_session(&sb, &device_id, &scfg) {
-                    eprintln!("live session failed: {e}");
+            if let Some((at, sched)) = next {
+                let wait = (at - Utc::now()).num_seconds().max(0) as u64;
+                if wait <= POLL_SECS {
+                    let title = if sched.title.is_empty() {
+                        "Focus".to_string()
+                    } else {
+                        sched.title.clone()
+                    };
+                    let scfg = SessionConfig {
+                        focus_min: sched.focus_block_min.max(1),
+                        break_min: sched.break_min.max(0),
+                        cycles: sched.cycles.max(1),
+                        allowed_apps: policy.allowed_apps.clone(),
+                        blocked_apps: policy.blocked_apps.clone(),
+                        force_quit_apps: policy.force_quit_apps.clone(),
+                        blocked_sites: policy.blocked_sites.clone(),
+                        block_sites: true, // scheduled desktop sessions enforce the policy's site list
+                        watch_remote_stop: false,
+                        broadcast: false,
+                        label: None,
+                        source: None,
+                    };
+                    pending_schedule = Some((at, title, scfg));
                 }
-                continue;
             }
         }
 
-        // 2) Scheduled DESKTOP sessions.
-        let now = Utc::now();
-        let schedules = sb.list_schedules().unwrap_or_default();
-        let next = schedules
-            .iter()
-            .filter(|s| {
-                s.enabled
-                    && s.target_platforms
-                        .iter()
-                        .any(|p| p.eq_ignore_ascii_case("DESKTOP"))
-            })
-            .filter_map(|s| next_run_utc(s, now).map(|t| (t, s)))
-            .min_by_key(|(t, _)| *t);
-
-        if let Some((at, sched)) = next {
-            let wait = (at - Utc::now()).num_seconds().max(0) as u64;
-            if wait <= POLL_SECS {
-                let title = if sched.title.is_empty() {
-                    "Focus".to_string()
-                } else {
-                    sched.title.clone()
-                };
-                sleep(Duration::from_secs(wait));
-                println!("Starting scheduled \"{title}\"…");
-                let scfg = SessionConfig {
-                    focus_min: sched.focus_block_min.max(1),
-                    break_min: sched.break_min.max(0),
-                    cycles: sched.cycles.max(1),
-                    allowed_apps: policy.allowed_apps.clone(),
-                    blocked_apps: policy.blocked_apps.clone(),
-                    force_quit_apps: policy.force_quit_apps.clone(),
-                    blocked_sites: policy.blocked_sites.clone(),
-                    block_sites: true, // scheduled desktop sessions enforce the policy's site list
-                    watch_remote_stop: false,
-                    broadcast: false,
-                };
-                if let Err(e) = run_session(&sb, &device_id, &scfg) {
-                    eprintln!("session failed: {e}");
-                }
+        // Feed every sample, but never start during the initial target-loading minute.
+        if let Some(target) = autofocus.observe(
+            started.elapsed().as_secs() as i64,
+            SAMPLE_SECS as i64,
+            active,
+            &window.app,
+            project.as_deref(),
+            &targets,
+        ) {
+            if started.elapsed() < Duration::from_secs(SYNC_SECS) {
                 continue;
             }
+            // Recheck immediately before starting; an unknown live state is skipped too.
+            match sb.get_active_session() {
+                Ok(Some(a)) if a.active => {
+                    autofocus.defer(&target.id); // another session is running — retry later
+                    continue;
+                }
+                Err(e) => {
+                    eprintln!("auto-focus live session check: {e}");
+                    autofocus.defer(&target.id);
+                    continue;
+                }
+                _ => {}
+            }
+            let scfg = auto_session_config(&target, &policy);
+            overlay::banner(
+                &format!("Auto-focus: {}", target.label),
+                &format!("{} min focus — distractions blocked", scfg.focus_min),
+                overlay::Tone::Good,
+            );
+            if let Err(e) = run_session(&sb, &device_id, &scfg) {
+                eprintln!("auto-focus session failed: {e}");
+            }
+            autofocus.session_finished(started.elapsed().as_secs() as i64);
+            tracker = Tracker::new();
+            pending_schedule = None;
         }
+    }
+}
 
-        sleep(Duration::from_secs(POLL_SECS));
+/// Auto-focus uses the desktop policy and optionally broadcasts to the phone.
+fn auto_session_config(target: &WorkTarget, policy: &Policy) -> SessionConfig {
+    SessionConfig {
+        focus_min: target.focus_min.clamp(5, 240),
+        break_min: 0,
+        cycles: 1,
+        allowed_apps: policy.allowed_apps.clone(),
+        blocked_apps: policy.blocked_apps.clone(),
+        force_quit_apps: policy.force_quit_apps.clone(),
+        blocked_sites: policy.blocked_sites.clone(),
+        block_sites: target.block_sites,
+        watch_remote_stop: true,
+        broadcast: target.block_phone,
+        label: Some(target.label.clone()),
+        source: Some("AUTO".into()),
     }
 }
 
@@ -139,6 +245,14 @@ fn session_from_config(config: &serde_json::Value, p: &Policy) -> SessionConfig 
         block_sites,
         watch_remote_stop: true, // phone owns this live session; stop when it clears active_sessions
         broadcast: false,
+        label: config
+            .get("label")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        source: config
+            .get("source")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
     }
 }
 
@@ -373,6 +487,28 @@ mod tests {
         assert_eq!(cfg.blocked_apps, policy.blocked_apps);
         assert_eq!(cfg.force_quit_apps, policy.force_quit_apps);
         assert_eq!(cfg.blocked_sites, policy.blocked_sites);
+    }
+
+    #[test]
+    fn auto_config_clamps_duration_and_uses_target_gates() {
+        for (duration, expected) in [(0, 5), (50, 50), (300, 240)] {
+            let target = WorkTarget {
+                label: "Build".into(),
+                focus_min: duration,
+                block_sites: false,
+                block_phone: false,
+                ..WorkTarget::default()
+            };
+            let cfg = auto_session_config(&target, &Policy::default());
+            assert_eq!((cfg.focus_min, cfg.break_min, cfg.cycles), (expected, 0, 1));
+            assert!(!cfg.block_sites);
+            assert!(!cfg.broadcast);
+            assert!(cfg.watch_remote_stop);
+            assert_eq!(cfg.label.as_deref(), Some("Build"));
+            assert_eq!(cfg.source.as_deref(), Some("AUTO"));
+        }
+        let cfg = auto_session_config(&WorkTarget::default(), &Policy::default());
+        assert!(cfg.block_sites && cfg.broadcast);
     }
 
     #[test]

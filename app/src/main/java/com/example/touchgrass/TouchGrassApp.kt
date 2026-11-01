@@ -11,6 +11,7 @@ import androidx.work.NetworkType
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import com.example.touchgrass.core.screentime.ScreenTimeNudger
+import com.example.touchgrass.features.focus.RemoteSessionJoiner
 import com.example.touchgrass.work.GoalMaintenanceWorker
 import dagger.hilt.android.HiltAndroidApp
 import timber.log.Timber
@@ -22,6 +23,10 @@ class TouchGrassApp : Application(), Configuration.Provider {
 
     @Inject
     lateinit var workerFactory: HiltWorkerFactory
+
+    // Injected only to start it with the app: follows focus sessions started on the laptop.
+    @Inject
+    lateinit var remoteSessionJoiner: RemoteSessionJoiner
 
     // WorkManager picks this up automatically (on-demand init) because the
     // Application implements Configuration.Provider.

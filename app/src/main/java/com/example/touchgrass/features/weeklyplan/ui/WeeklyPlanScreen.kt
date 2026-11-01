@@ -1,5 +1,6 @@
 package com.example.touchgrass.features.weeklyplan.ui
 
+import com.example.touchgrass.features.worktargets.WorkTargetUsage
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -128,7 +129,10 @@ class WeeklyPlanViewModel @Inject constructor(
 
 /** Where every weekly-lockable setting lives together (each feature also edits its own). */
 @Composable
-fun WeeklyPlanScreen(viewModel: WeeklyPlanViewModel = hiltViewModel()) {
+fun WeeklyPlanScreen(
+    onOpenWorkTargets: () -> Unit = {},
+    viewModel: WeeklyPlanViewModel = hiltViewModel()
+) {
     val state by viewModel.state.collectAsState()
     val points by viewModel.points.collectAsState()
     val pagesRead by viewModel.readingProgress.collectAsState()
@@ -264,7 +268,24 @@ fun WeeklyPlanScreen(viewModel: WeeklyPlanViewModel = hiltViewModel()) {
             )
         }
 
-        PlanCard("Focus quotas", "Minimum focused time per app, e.g. VS Code 20 min/week", { Tag("SOON", TextSecondary) }) {}
+        PlanCard(
+            "Focus quotas",
+            "Minimum weekly time in a laptop app or project, e.g. VS Code on TouchGrass",
+            { lockStatus(PlanField.FOCUS_QUOTAS) }
+        ) {
+            val quotas = plan.focusQuotaMinutes.values.filter { it > 0 }
+            Text(
+                if (quotas.isEmpty()) "No quotas yet"
+                else "${quotas.size} quota${if (quotas.size == 1) "" else "s"} · ${WorkTargetUsage.formatMinutes(quotas.sum())} a week",
+                color = TextPrimary, fontSize = 13.sp
+            )
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "Manage work targets ›",
+                color = GrassGreen, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.clickable(onClick = onOpenWorkTargets)
+            )
+        }
 
         if (!state.committed) {
             Button(

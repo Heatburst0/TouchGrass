@@ -6,6 +6,14 @@ allowed app (VS Code, Android Studio, …) is focused — and syncs each session
 Supabase, so it shows up in your phone's history and streaks. It can also
 auto-start `DESKTOP`-targeted schedules you create on the phone.
 
+While `run` watches, it also tracks active app/project seconds for focus quotas
+and starts auto-focus sessions for enabled work targets after sustained activity.
+Auto-focus waits through the first minute after startup, tolerates brief gaps,
+and requires 15 minutes away before a target can trigger again. Usage also counts
+during focus sessions and breaks, and syncs about once a minute. Failed uploads
+are retried in memory (up to 500 app/project/day entries); restarting loses unsent
+usage. Apply the work-targets migration before using these features.
+
 ## Prerequisites
 
 - **Rust** (stable): install from [rustup.rs](https://rustup.rs).
@@ -53,6 +61,8 @@ phone → Focus tab and the laptop session appears in **Your record**.
 
 The agent records **whether** input happened and the **active app's name** — never
 keystrokes, clipboard, or screen contents.
+IDE window titles are parsed locally: only the parsed project name is uploaded,
+never window titles or file names. Other apps have no project attached.
 
 ## Notes / limits (MVP)
 

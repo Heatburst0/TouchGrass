@@ -1,6 +1,14 @@
 use active_win_pos_rs::get_active_window;
 use device_query::{DeviceQuery, DeviceState};
 
+/// Foreground window metadata. Titles are used locally to parse project names.
+#[derive(Default)]
+pub struct WindowInfo {
+    pub app: String,
+    pub pid: u64,
+    pub title: String,
+}
+
 /// Samples input *activity* (not contents) and the active window's app.
 pub struct Tracker {
     device: DeviceState,
@@ -34,10 +42,21 @@ impl Tracker {
 
     /// The active window's app name (lowercased) and its process id; ("", 0) if
     /// it can't be read.
+    #[allow(dead_code)] // compatibility API; sampling now also needs the title
     pub fn active_window(&self) -> (String, u64) {
+        let window = self.active_window_info();
+        (window.app, window.pid)
+    }
+
+    /// Read the foreground window, or empty metadata when it is unavailable.
+    pub fn active_window_info(&self) -> WindowInfo {
         match get_active_window() {
-            Ok(w) => (w.app_name.to_lowercase(), w.process_id),
-            Err(_) => (String::new(), 0),
+            Ok(w) => WindowInfo {
+                app: w.app_name.to_lowercase(),
+                pid: w.process_id,
+                title: w.title,
+            },
+            Err(_) => WindowInfo::default(),
         }
     }
 }
