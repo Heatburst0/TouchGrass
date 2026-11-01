@@ -6,6 +6,7 @@ mod hosts;
 mod notify;
 mod overlay;
 mod project;
+mod projects_scan;
 mod realtime;
 mod schedule;
 mod supabase;

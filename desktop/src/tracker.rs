@@ -5,6 +5,7 @@ use device_query::{DeviceQuery, DeviceState};
 #[derive(Default)]
 pub struct WindowInfo {
     pub app: String,
+    pub original_app: String,
     pub pid: u64,
     pub title: String,
 }
@@ -53,10 +54,48 @@ impl Tracker {
         match get_active_window() {
             Ok(w) => WindowInfo {
                 app: w.app_name.to_lowercase(),
+                original_app: w.app_name,
                 pid: w.process_id,
                 title: w.title,
             },
             Err(_) => WindowInfo::default(),
         }
+    }
+}
+
+impl WindowInfo {
+    pub fn display_name(&self) -> String {
+        if !self.original_app.trim().is_empty() {
+            return self.original_app.clone();
+        }
+        self.app
+            .split_whitespace()
+            .map(|word| {
+                let mut chars = word.chars();
+                match chars.next() {
+                    Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                    None => String::new(),
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn display_name_preserves_branding_without_changing_the_match_key() {
+        let mut window = WindowInfo {
+            app: "intellij idea".to_string(),
+            original_app: "IntelliJ IDEA".to_string(),
+            ..WindowInfo::default()
+        };
+        assert_eq!(window.display_name(), "IntelliJ IDEA");
+        assert_eq!(window.app, "intellij idea");
+        window.original_app.clear();
+        assert_eq!(window.display_name(), "Intellij Idea");
     }
 }

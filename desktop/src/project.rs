@@ -25,6 +25,7 @@ pub fn parse_project(app: &str, title: &str) -> Option<String> {
     } else if [
         "idea",
         "studio64",
+        "android studio",
         "pycharm",
         "webstorm",
         "clion",
@@ -161,6 +162,8 @@ mod tests {
         for app in [
             "idea64",
             "studio64",
+            "android studio",
+            "intellij idea",
             "pycharm",
             "webstorm",
             "clion",

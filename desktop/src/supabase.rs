@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 /// Minimal blocking Supabase client: GoTrue auth (email OTP) + PostgREST writes.
+#[derive(Clone)]
 pub struct Supabase {
     http: reqwest::blocking::Client,
     url: String,
@@ -175,6 +176,30 @@ impl Supabase {
                 "last_seen": chrono::Utc::now().to_rfc3339(),
             }),
         )
+    }
+
+    /// Only locally parsed folder names belong in this table.
+    pub fn upsert_device_project(
+        &self,
+        device_id: &str,
+        app_name: &str,
+        project: &str,
+    ) -> Result<()> {
+        let resp = self
+            .http
+            .post(format!("{}/rest/v1/device_projects", self.url))
+            .header("apikey", &self.anon_key)
+            .header("Authorization", format!("Bearer {}", self.access()?))
+            .header("Prefer", "resolution=merge-duplicates")
+            .timeout(std::time::Duration::from_secs(10))
+            .json(&json!({
+                "device_id": device_id,
+                "app_name": app_name,
+                "project": project,
+                "last_seen": chrono::Utc::now().to_rfc3339(),
+            }))
+            .send()?;
+        expect_ok(resp, "upsert device project")
     }
 
     pub fn insert_focus_session(&self, s: &RemoteFocusSession) -> Result<()> {

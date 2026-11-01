@@ -8,12 +8,72 @@ use chrono::{
     DateTime, Datelike, Duration as ChronoDuration, Local, NaiveTime, TimeZone, Utc, Weekday,
 };
 use chrono_tz::Tz;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 const POLL_SECS: u64 = 20;
 const SAMPLE_SECS: u64 = 5;
 const SYNC_SECS: u64 = 60;
+
+type ProjectUploads = Vec<((String, String), Instant)>;
+
+#[derive(Default)]
+struct ProjectDiscovery {
+    last_scan: Option<Instant>,
+    projects: Vec<(String, String)>,
+    uploaded: HashMap<(String, String), Instant>,
+    worker: Option<std::thread::JoinHandle<ProjectUploads>>,
+}
+
+impl ProjectDiscovery {
+    fn poll(&mut self, sb: &crate::supabase::Supabase, device_id: &str) {
+        if self
+            .last_scan
+            .is_none_or(|at| at.elapsed() >= Duration::from_secs(6 * 60 * 60))
+        {
+            self.projects = crate::projects_scan::scan();
+            self.last_scan = Some(Instant::now());
+        }
+        if self
+            .worker
+            .as_ref()
+            .is_some_and(|worker| worker.is_finished())
+        {
+            if let Ok(uploaded) = self.worker.take().unwrap().join() {
+                self.uploaded.extend(uploaded);
+            }
+        }
+        if self.worker.is_some() {
+            return;
+        }
+        let pending: Vec<_> = self
+            .projects
+            .iter()
+            .filter(|pair| {
+                self.uploaded
+                    .get(*pair)
+                    .is_none_or(|at| at.elapsed() >= Duration::from_secs(24 * 60 * 60))
+            })
+            .cloned()
+            .collect();
+        if pending.is_empty() {
+            return;
+        }
+        let sb = sb.clone();
+        let device_id = device_id.to_string();
+        // Network requests must not delay foreground/input samples. Failures remain
+        // eligible at the next poll; only successful writes refresh the cache.
+        self.worker = Some(std::thread::spawn(move || {
+            pending
+                .into_iter()
+                .filter_map(|(app, project)| {
+                    sb.upsert_device_project(&device_id, &app, &project).ok()?;
+                    Some(((app, project), Instant::now()))
+                })
+                .collect()
+        }));
+    }
+}
 
 /// Advance the sampling clock only for a real five-second observation.
 fn sample_due(last: &mut Instant, now: Instant) -> bool {
@@ -37,7 +97,9 @@ pub fn watch(cfg: &mut Config) -> Result<()> {
     let mut handled_live: Option<String> = None;
     let mut tracker = Tracker::new();
     let mut seen_apps: HashSet<String> = HashSet::new();
-    let mut pending_apps: HashSet<String> = HashSet::new();
+    let mut pending_apps: HashMap<String, String> = HashMap::new();
+    let mut project_discovery = ProjectDiscovery::default();
+    project_discovery.poll(&sb, &device_id);
     let started = Instant::now();
     let mut last_poll: Option<Instant> = None;
     let mut last_sync: Option<Instant> = None;
@@ -69,7 +131,7 @@ pub fn watch(cfg: &mut Config) -> Result<()> {
                 usage::record(&window.app, project.as_deref(), SAMPLE_SECS as i64);
             }
             if !window.app.is_empty() && !seen_apps.contains(&window.app) {
-                pending_apps.insert(window.app.clone());
+                pending_apps.insert(window.app.clone(), window.display_name());
             }
             Some((active, window, project))
         } else {
@@ -129,8 +191,9 @@ pub fn watch(cfg: &mut Config) -> Result<()> {
 
             // Passively discover foreground apps so the phone's rules picker fills in
             // even before any session runs.
-            pending_apps.retain(|app| {
-                if sb.upsert_device_app(&device_id, app, app).is_ok() {
+            project_discovery.poll(&sb, &device_id);
+            pending_apps.retain(|app, display_name| {
+                if sb.upsert_device_app(&device_id, app, display_name).is_ok() {
                     seen_apps.insert(app.clone());
                     false
                 } else {

@@ -248,6 +248,7 @@ pub fn run_session(sb: &Supabase, device_id: &str, cfg: &SessionConfig) -> Resul
             elapsed += SAMPLE_SECS;
             let active = tracker.sample_active();
             let window = tracker.active_window_info();
+            let display_name = window.display_name();
             let (app, pid) = (window.app, window.pid);
             if active {
                 let project = project::parse_project(&app, &window.title);
@@ -258,7 +259,7 @@ pub fn run_session(sb: &Supabase, device_id: &str, cfg: &SessionConfig) -> Resul
                 last_usage_flush = Instant::now();
             }
             if !app.is_empty() && seen.insert(app.clone()) {
-                let _ = sb.upsert_device_app(device_id, &app, &app);
+                let _ = sb.upsert_device_app(device_id, &app, &display_name);
             }
             if quit.iter().any(|a| app.contains(a)) {
                 enforce::force_quit(pid);

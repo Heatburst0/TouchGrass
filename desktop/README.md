@@ -70,6 +70,19 @@ keystrokes, clipboard, or screen contents.
 IDE window titles are parsed locally: only the parsed project name is uploaded,
 never window titles or file names. Other apps have no project attached.
 
+While `run` watches, the agent reads the IDEs' own recent-project lists in Windows
+`%APPDATA%` at startup and about every six hours: VS Code (including Insiders),
+Cursor, Windsurf, JetBrains products, and Android Studio. Only the final project
+folder name (up to 80 characters) and lowercased app name are uploaded to
+`device_projects`; paths stay local. Named `.code-workspace` entries use their
+stem. Multiple IDE versions are combined and duplicates removed, with at most
+200 app/project pairs per scan. Missing or unreadable lists are silently skipped.
+Apply `20261102120000_device_projects.sql` before using project discovery.
+Uploads run in the background, retry failed writes while watching, and refresh
+successful pairs after 24 hours; this upload cache lasts only for the current run.
+App picker display names preserve the window API's original capitalization,
+falling back to title case when it is unavailable.
+
 ## Notes / limits (MVP)
 
 - This is **tracking**, not hard enforcement — it measures productive time and
