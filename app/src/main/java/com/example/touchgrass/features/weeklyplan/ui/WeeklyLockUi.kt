@@ -15,6 +15,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.touchgrass.core.discipline.PlanField
 import com.example.touchgrass.features.weeklyplan.WeeklyPlanState
 import com.example.touchgrass.ui.theme.AmberWarn
 import java.time.Instant
@@ -26,6 +27,19 @@ private val DAY_TIME = DateTimeFormatter.ofPattern("EEE, HH:mm")
 
 /** "Sat, 00:00" in the device zone. */
 internal fun formatLockTime(instant: Instant): String = DAY_TIME.format(instant.atZone(ZoneId.systemDefault()))
+
+/** Which way a locked setting may still move. */
+enum class LockDirection(val word: String) { DOWN("down"), UP("up") }
+
+/**
+ * "🔒 Weekly plan: can only go down until Sat" — the inline reason a slider stops at a
+ * bound. Null when [field] can be loosened right now (unlocked, or a paid unlock is ready).
+ */
+fun weeklyLockHint(state: WeeklyPlanState, field: PlanField, canOnlyGo: LockDirection): String? {
+    if (!state.locked || field in state.readyUnlocks) return null
+    val until = state.window.lockedUntil?.let { DAY.format(it.atZone(ZoneId.systemDefault())) } ?: "the weekend"
+    return "🔒 Weekly plan: can only go ${canOnlyGo.word} until $until"
+}
 
 /**
  * Small pill shown next to any setting the weekly plan controls; tapping opens the hub.

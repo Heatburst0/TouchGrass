@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -44,6 +45,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.touchgrass.core.remote.DeviceAppsRepository
 import com.example.touchgrass.core.remote.FocusPolicyRepository
 import com.example.touchgrass.core.remote.LaptopSessionsRepository
+import com.example.touchgrass.ui.components.BackTopBar
 import com.example.touchgrass.ui.theme.AmberWarn
 import com.example.touchgrass.ui.theme.DangerRed
 import com.example.touchgrass.ui.theme.GrassGreen
@@ -188,7 +190,7 @@ private fun roleColor(role: AppRole): Color = when (role) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun LaptopRulesScreen(viewModel: LaptopRulesViewModel = hiltViewModel()) {
+fun LaptopRulesScreen(onBack: () -> Unit = {}, viewModel: LaptopRulesViewModel = hiltViewModel()) {
     val apps by viewModel.apps.collectAsState()
     val policy by viewModel.policy.collectAsState()
     val suggestions by viewModel.suggestions.collectAsState()
@@ -198,13 +200,16 @@ fun LaptopRulesScreen(viewModel: LaptopRulesViewModel = hiltViewModel()) {
         modifier = Modifier
             .fillMaxSize()
             .background(Ink)
+            .statusBarsPadding()
             .verticalScroll(rememberScrollState())
             .padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        Spacer(Modifier.height(8.dp))
-        Text("Laptop focus rules", color = TextPrimary, fontSize = 24.sp, fontWeight = FontWeight.ExtraBold)
-        Text("Choose how focus sessions treat each laptop app.", color = TextSecondary, fontSize = 13.sp)
+        BackTopBar(
+            title = "Laptop rules",
+            subtitle = "Which laptop apps count as work or get blocked during focus",
+            onBack = onBack
+        )
 
         if (!viewModel.isConfigured) {
             RuleCard {

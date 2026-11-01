@@ -3,6 +3,9 @@ package com.example.touchgrass.presentation.dashboard
 import com.example.touchgrass.core.discipline.PlanField
 import com.example.touchgrass.features.weeklyplan.ui.LockMessageToast
 import com.example.touchgrass.features.weeklyplan.ui.WeeklyLockBadge
+import com.example.touchgrass.features.weeklyplan.ui.LockDirection
+import com.example.touchgrass.features.weeklyplan.ui.weeklyLockHint
+import com.example.touchgrass.ui.components.ValueSlider
 import android.content.Intent
 import android.net.Uri
 import android.provider.Settings
@@ -36,8 +39,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
@@ -45,7 +46,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -261,7 +261,7 @@ fun DoomscrollDashboard(viewModel: DashboardViewModel, onOpenWeeklyPlan: () -> U
         LimitCard(
             limit = limit,
             // Locked: raising waits for the weekend (or a paid unlock), so cap at today's value.
-            maxLimit = if (weeklyPlan.locked && PlanField.SHORTS_LIMIT !in weeklyPlan.readyUnlocks) limit else MAX_LIMIT,
+            lockHint = weeklyLockHint(weeklyPlan, PlanField.SHORTS_LIMIT, LockDirection.DOWN),
             onLimitChange = { viewModel.updateShortsLimit(it) }
         )
 
@@ -502,10 +502,7 @@ private fun GoalRow(title: String, detail: String, trailing: String, trailingOk:
 private const val MAX_LIMIT = 50
 
 @Composable
-private fun LimitCard(limit: Int, maxLimit: Int, onLimitChange: (Int) -> Unit) {
-    // Draft state while dragging; committed (and persisted) on release
-    var draft by remember(limit) { mutableFloatStateOf(limit.toFloat()) }
-
+private fun LimitCard(limit: Int, lockHint: String?, onLimitChange: (Int) -> Unit) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -514,47 +511,15 @@ private fun LimitCard(limit: Int, maxLimit: Int, onLimitChange: (Int) -> Unit) {
             .border(1.dp, InkBorder, CardShape)
             .padding(horizontal = 18.dp, vertical = 16.dp)
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column {
-                Text(
-                    text = "Daily limit",
-                    color = TextPrimary,
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.SemiBold
-                )
-                Text(
-                    text = "Blocks Shorts after ${draft.roundToInt()} videos",
-                    color = TextSecondary,
-                    fontSize = 12.sp
-                )
-            }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                RoundStepButton("-", enabled = limit > 1) { onLimitChange(limit - 1) }
-                Text(
-                    text = "${draft.roundToInt()}",
-                    color = GrassGreen,
-                    fontSize = 24.sp,
-                    fontWeight = FontWeight.ExtraBold,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.width(52.dp)
-                )
-                RoundStepButton("+", enabled = limit < maxLimit) { onLimitChange(limit + 1) }
-            }
-        }
-        Slider(
-            value = draft,
-            onValueChange = { draft = it },
-            onValueChangeFinished = { onLimitChange(draft.roundToInt()) },
-            valueRange = 1f..maxOf(maxLimit, 2).toFloat(),
-            colors = SliderDefaults.colors(
-                thumbColor = GrassGreen,
-                activeTrackColor = GrassGreen,
-                inactiveTrackColor = InkBorder
-            )
+        ValueSlider(
+            label = "Daily limit",
+            value = limit,
+            range = 1..MAX_LIMIT,
+            onValueChange = onLimitChange,
+            caption = { "Blocks Shorts after $it videos" },
+            // Locked: raising waits for the weekend (or a paid unlock), so cap at today's value.
+            lockedMax = if (lockHint != null) limit else null,
+            lockReason = lockHint
         )
     }
 }
@@ -618,25 +583,6 @@ private fun TestModeCard(enabled: Boolean, trackedCount: Int, onToggle: (Boolean
                 )
             }
         }
-    }
-}
-
-@Composable
-private fun RoundStepButton(symbol: String, enabled: Boolean, onClick: () -> Unit) {
-    Box(
-        modifier = Modifier
-            .size(36.dp)
-            .clip(CircleShape)
-            .background(if (enabled) InkBorder else InkBorder.copy(alpha = 0.4f))
-            .clickable(enabled = enabled, onClick = onClick),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(
-            text = symbol,
-            color = if (enabled) TextPrimary else TextSecondary,
-            fontSize = 20.sp,
-            fontWeight = FontWeight.Bold
-        )
     }
 }
 

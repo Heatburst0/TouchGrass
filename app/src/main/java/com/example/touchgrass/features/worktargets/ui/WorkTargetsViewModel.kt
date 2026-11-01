@@ -8,6 +8,7 @@ import com.example.touchgrass.core.remote.DeviceAppsRepository
 import com.example.touchgrass.features.weeklyplan.WeeklyPlanRepository
 import com.example.touchgrass.features.weeklyplan.WeeklyPlanState
 import com.example.touchgrass.features.worktargets.AppUsageRow
+import com.example.touchgrass.features.worktargets.DeviceProject
 import com.example.touchgrass.features.worktargets.WorkTarget
 import com.example.touchgrass.features.worktargets.WorkTargetUsage
 import com.example.touchgrass.features.worktargets.WorkTargetsRepository
@@ -26,6 +27,24 @@ import javax.inject.Inject
 /** A target as the list shows it: this week's minutes against its (plan-owned) quota. */
 data class TargetRow(val target: WorkTarget, val quotaMin: Int, val weekMin: Int)
 
+/** Rows for [targets] this week; quotas come from the weekly plan. Shared with the Focus tab. */
+internal fun buildTargetRows(
+    targets: List<WorkTarget>,
+    usage: List<AppUsageRow>,
+    quotas: Map<String, Int>,
+    today: LocalDate = LocalDate.now()
+): List<TargetRow> {
+    val week = WorkTargetUsage.weekStart(today)
+    return targets.map { t -> TargetRow(t, quotas[t.id] ?: 0, WorkTargetUsage.minutesInWeek(t, usage, week)) }
+}
+
+/** Everything the target picker suggests from. */
+data class PickerSource(
+    val projects: List<DeviceProject> = emptyList(),
+    val usage: List<AppUsageRow> = emptyList(),
+    val apps: List<DeviceApp> = emptyList()
+)
+
 @HiltViewModel
 class WorkTargetsViewModel @Inject constructor(
     private val repo: WorkTargetsRepository,
@@ -33,17 +52,16 @@ class WorkTargetsViewModel @Inject constructor(
     private val weeklyPlan: WeeklyPlanRepository
 ) : ViewModel() {
     val isConfigured: Boolean = repo.isConfigured
-    val apps: StateFlow<List<DeviceApp>> = deviceApps.apps
     val usage: StateFlow<List<AppUsageRow>> = repo.usage
     val plan: StateFlow<WeeklyPlanState> = weeklyPlan.state
     val message = MutableStateFlow<String?>(null)
 
     val rows: StateFlow<List<TargetRow>> = combine(repo.targets, repo.usage, weeklyPlan.state) { targets, usage, plan ->
-        val week = WorkTargetUsage.weekStart(LocalDate.now())
-        targets.map { t ->
-            TargetRow(t, plan.plan.focusQuotaMinutes[t.id] ?: 0, WorkTargetUsage.minutesInWeek(t, usage, week))
-        }
+        buildTargetRows(targets, usage, plan.plan.focusQuotaMinutes)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val pickerSource: StateFlow<PickerSource> = combine(repo.projects, repo.usage, deviceApps.apps, ::PickerSource)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), PickerSource())
 
     init {
         refresh()
@@ -55,8 +73,6 @@ class WorkTargetsViewModel @Inject constructor(
             deviceApps.refresh()
         }
     }
-
-    fun recentProjects(appName: String?): List<String> = WorkTargetUsage.recentProjects(usage.value, appName)
 
     /** Save the target, then its quota through the weekly plan (lowering waits for the weekend). */
     fun save(target: WorkTarget, quotaMin: Int) {

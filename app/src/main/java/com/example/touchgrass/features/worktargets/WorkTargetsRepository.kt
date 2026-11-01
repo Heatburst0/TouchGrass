@@ -5,6 +5,7 @@ import com.example.touchgrass.di.ApplicationScope
 import io.github.jan.supabase.SupabaseClient
 import io.github.jan.supabase.auth.status.SessionStatus
 import io.github.jan.supabase.postgrest.from
+import io.github.jan.supabase.postgrest.query.Order
 import io.github.jan.supabase.realtime.PostgresAction
 import io.github.jan.supabase.realtime.channel
 import io.github.jan.supabase.realtime.postgresChangeFlow
@@ -18,6 +19,7 @@ import kotlinx.serialization.Serializable
 import timber.log.Timber
 import java.io.IOException
 import java.time.LocalDate
+import java.time.OffsetDateTime
 import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -44,9 +46,17 @@ private data class RemoteUsage(
     val active_seconds: Int = 0
 )
 
+@Serializable
+private data class RemoteDeviceProject(
+    val app_name: String = "",
+    val project: String = "",
+    val last_seen: String? = null
+)
+
 /**
  * The user's work targets (Supabase `work_targets`, live via realtime) and the
- * laptop agent's recent `app_usage`, which quota progress is computed from.
+ * laptop agent's recent `app_usage`, which quota progress is computed from, plus the
+ * IDE recent-project lists it reports (`device_projects`) for the target picker.
  */
 @Singleton
 class WorkTargetsRepository @Inject constructor(
@@ -62,6 +72,11 @@ class WorkTargetsRepository @Inject constructor(
     /** The last [USAGE_LOOKBACK_DAYS] days of laptop usage (for progress + project suggestions). */
     val usage: StateFlow<List<AppUsageRow>> = _usage.asStateFlow()
 
+    private val _projects = MutableStateFlow<List<DeviceProject>>(emptyList())
+
+    /** Projects from the laptop IDEs' own recent lists, newest first — picker suggestions. */
+    val projects: StateFlow<List<DeviceProject>> = _projects.asStateFlow()
+
     val isConfigured: Boolean = auth.isConfigured
 
     @Volatile private var realtimeStarted = false
@@ -76,6 +91,7 @@ class WorkTargetsRepository @Inject constructor(
                     } else {
                         _targets.value = emptyList()
                         _usage.value = emptyList()
+                        _projects.value = emptyList()
                     }
                 }
             }
@@ -85,7 +101,16 @@ class WorkTargetsRepository @Inject constructor(
     suspend fun refresh() {
         refreshTargets()
         refreshUsage()
+        refreshProjects()
     }
+
+    /** Reload IDE recent projects; false when the server couldn't be reached. */
+    suspend fun refreshProjects(): Boolean = runCatching {
+        _projects.value = supabase.from("device_projects").select {
+            order("last_seen", Order.DESCENDING)
+            limit(PROJECTS_LIMIT)
+        }.decodeList<RemoteDeviceProject>().mapNotNull { it.toDomain() }
+    }.onFailure { logFailure(it, "device projects refresh failed") }.isSuccess
 
     /** Reload recent usage; false when the server couldn't be reached. */
     suspend fun refreshUsage(): Boolean = runCatching {
@@ -195,7 +220,14 @@ class WorkTargetsRepository @Inject constructor(
         AppUsageRow(LocalDate.parse(day), app_name, project, active_seconds)
     }.getOrNull()
 
+    private fun RemoteDeviceProject.toDomain(): DeviceProject? {
+        if (app_name.isBlank() || project.isBlank()) return null
+        val seen = last_seen?.let { runCatching { OffsetDateTime.parse(it).toInstant() }.getOrNull() }
+        return DeviceProject(app_name, project, seen)
+    }
+
     private companion object {
         const val USAGE_LOOKBACK_DAYS = 35L
+        const val PROJECTS_LIMIT = 500L
     }
 }

@@ -36,7 +36,9 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.example.touchgrass.features.weeklyplan.ui.LockMessageToast
 import com.example.touchgrass.features.worktargets.WorkTarget
+import com.example.touchgrass.features.worktargets.WorkTargetSuggestions
 import com.example.touchgrass.features.worktargets.WorkTargetUsage
+import com.example.touchgrass.ui.components.BackTopBar
 import com.example.touchgrass.ui.theme.AmberWarn
 import com.example.touchgrass.ui.theme.GrassGreen
 import com.example.touchgrass.ui.theme.Ink
@@ -47,10 +49,10 @@ import com.example.touchgrass.ui.theme.TextSecondary
 
 /** Laptop work targets: weekly quotas (plan-locked) and auto-focus triggers. */
 @Composable
-fun WorkTargetsScreen(viewModel: WorkTargetsViewModel = hiltViewModel()) {
+fun WorkTargetsScreen(onBack: () -> Unit = {}, viewModel: WorkTargetsViewModel = hiltViewModel()) {
     val rows by viewModel.rows.collectAsState()
     val usage by viewModel.usage.collectAsState()
-    val apps by viewModel.apps.collectAsState()
+    val source by viewModel.pickerSource.collectAsState()
     val plan by viewModel.plan.collectAsState()
     val message by viewModel.message.collectAsState()
     // null = closed; a blank-id target = adding a new one
@@ -66,8 +68,11 @@ fun WorkTargetsScreen(viewModel: WorkTargetsViewModel = hiltViewModel()) {
             .padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Text("Work targets", color = TextPrimary, fontSize = 24.sp, fontWeight = FontWeight.ExtraBold)
-        Text("Time you want to spend — tracked by your laptop agent", color = TextSecondary, fontSize = 13.sp)
+        BackTopBar(
+            title = "Work targets",
+            subtitle = "Time you want to spend — tracked by your laptop agent",
+            onBack = onBack
+        )
 
         if (!viewModel.isConfigured) {
             Card { Text("Sign in on Tools → Account & sync first.", color = TextSecondary, fontSize = 13.sp) }
@@ -106,8 +111,7 @@ fun WorkTargetsScreen(viewModel: WorkTargetsViewModel = hiltViewModel()) {
     editing?.let { row ->
         WorkTargetEditor(
             initial = row,
-            apps = apps,
-            recentProjects = viewModel::recentProjects,
+            source = source,
             quotaLocked = plan.locked,
             onDismiss = { editing = null },
             onSave = { target, quota -> viewModel.save(target, quota); editing = null },
@@ -128,7 +132,10 @@ private fun TargetCard(
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text(t.label, color = TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
-                Text("${t.appName} · ${t.project ?: "any project"}", color = TextSecondary, fontSize = 12.sp)
+                Text(
+                    "${WorkTargetSuggestions.label(t.appName)} · ${t.project ?: "any project"}",
+                    color = TextSecondary, fontSize = 12.sp
+                )
             }
             Text("Edit ›", color = GrassGreen, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
         }

@@ -135,16 +135,19 @@ fun TouchGrassAppRoot(startRoute: String? = null) {
                 )
             }
             composable(Routes.LAPTOP_RULES) {
-                LaptopRulesScreen()
+                LaptopRulesScreen(onBack = { navController.popBackStack() })
             }
             composable(Routes.TOOLS) {
                 ToolsHubScreen(onOpenRoute = { navController.navigate(it) })
             }
             composable(Routes.WEEKLY_PLAN) {
-                WeeklyPlanScreen(onOpenWorkTargets = { navController.navigate(Routes.WORK_TARGETS) })
+                WeeklyPlanScreen(
+                    onOpenWorkTargets = { navController.navigate(Routes.WORK_TARGETS) },
+                    onBack = { navController.popBackStack() }
+                )
             }
             composable(Routes.WORK_TARGETS) {
-                WorkTargetsScreen()
+                WorkTargetsScreen(onBack = { navController.popBackStack() })
             }
             composable(Routes.ACCOUNT) {
                 AccountScreen()

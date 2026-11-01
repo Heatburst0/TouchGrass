@@ -1,211 +1,52 @@
 package com.example.touchgrass.features.focus.ui
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Checkbox
-import androidx.compose.material3.CheckboxDefaults
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
-import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.LocalLifecycleOwner
-import androidx.lifecycle.viewModelScope
-import com.example.touchgrass.core.data.SettingsRepository
-import com.example.touchgrass.core.data.db.FocusSessionEntity
-import com.example.touchgrass.core.data.db.FocusStats
-import com.example.touchgrass.core.screentime.ScreenTimeNudger
-import com.example.touchgrass.features.focus.AppInfo
-import com.example.touchgrass.features.focus.FocusConfig
-import com.example.touchgrass.features.focus.FocusSchedule
-import java.time.DayOfWeek
-import com.example.touchgrass.features.focus.FocusOutcome
-import com.example.touchgrass.features.focus.FocusPhase
-import com.example.touchgrass.features.focus.FocusSessionManager
-import com.example.touchgrass.features.focus.InstalledApps
-import com.example.touchgrass.features.focus.FocusScheduleScheduler
-import com.example.touchgrass.features.focus.focusPhaseAt
-import com.example.touchgrass.isAccessibilityEnabled
-import com.example.touchgrass.ui.theme.AmberWarn
-import com.example.touchgrass.ui.theme.DangerRed
-import com.example.touchgrass.ui.theme.GrassGreen
-import com.example.touchgrass.ui.theme.Ink
-import com.example.touchgrass.ui.theme.InkBorder
-import com.example.touchgrass.ui.theme.InkElevated
-import com.example.touchgrass.ui.theme.TextPrimary
-import com.example.touchgrass.ui.theme.TextSecondary
-import dagger.hilt.android.lifecycle.HiltViewModel
-import com.example.touchgrass.features.focus.insights.AppCategoryLookup
-import com.example.touchgrass.features.focus.insights.RecordItem
-import com.example.touchgrass.features.focus.insights.RecordMerger
-import com.example.touchgrass.features.focus.insights.UsageEventsSource
 import com.example.touchgrass.core.discipline.PlanField
-import com.example.touchgrass.features.weeklyplan.WeeklyPlanRepository
-import com.example.touchgrass.features.weeklyplan.WeeklyPlanState
+import com.example.touchgrass.core.screentime.ScreenTimeNudger
+import com.example.touchgrass.features.focus.FocusPhase
+import com.example.touchgrass.features.focus.focusPhaseAt
 import com.example.touchgrass.features.weeklyplan.ui.LockMessageToast
 import com.example.touchgrass.features.weeklyplan.ui.WeeklyLockBadge
-import kotlinx.coroutines.Dispatchers
+import com.example.touchgrass.isAccessibilityEnabled
+import com.example.touchgrass.ui.theme.AmberWarn
+import com.example.touchgrass.ui.theme.GrassGreen
+import com.example.touchgrass.ui.theme.Ink
+import com.example.touchgrass.ui.theme.TextPrimary
+import com.example.touchgrass.ui.theme.TextSecondary
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharingStarted
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.flowOn
-import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.flow.stateIn
-import kotlinx.coroutines.launch
-import javax.inject.Inject
 
-/** Only suggest apps used at least this much in the last week. */
-private const val SUGGEST_MIN_WEEK_MS = 20 * 60_000L
-private const val SUGGEST_MAX = 3
-private const val WEEK_MS = 7 * 24 * 60 * 60_000L
-
-@HiltViewModel
-class FocusViewModel @Inject constructor(
-    private val manager: FocusSessionManager,
-    private val settings: SettingsRepository,
-    private val installedApps: InstalledApps,
-    private val scheduleRepo: com.example.touchgrass.features.focus.FocusScheduleRepository,
-    private val usageEvents: UsageEventsSource,
-    private val appCategories: AppCategoryLookup,
-    private val weeklyPlanRepo: WeeklyPlanRepository
-) : ViewModel() {
-    val activeSession = manager.activeSession
-    val rememberedBlocked = settings.focusBlockedPackages
-
-    /** "Your record": phone + laptop sessions, a synced pair merged into one row. */
-    val recordItems: StateFlow<List<RecordItem>> = manager.recentSessions
-        .map { RecordMerger.merge(it) }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
-    val recordStats: StateFlow<FocusStats> = recordItems
-        .map { RecordMerger.stats(it) }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), FocusStats(0, 0, 0))
-
-    private val weekUsage = MutableStateFlow<Map<String, Long>>(emptyMap())
-    private val dismissedSuggestions = MutableStateFlow<Set<String>>(emptySet())
-
-    /** Social / entertainment apps used a lot this week that focus doesn't block yet. */
-    val blockSuggestions: StateFlow<List<BlockSuggestion>> =
-        combine(weekUsage, rememberedBlocked, dismissedSuggestions) { usage, remembered, dismissed ->
-            val blocked = remembered.ifEmpty { ScreenTimeNudger.WATCHED_PACKAGES }
-            usage.entries
-                .filter { (pkg, ms) ->
-                    ms >= SUGGEST_MIN_WEEK_MS && pkg !in blocked && pkg !in dismissed &&
-                        appCategories.isDistracting(pkg)
-                }
-                .sortedByDescending { it.value }
-                .take(SUGGEST_MAX)
-                .map { BlockSuggestion(it.key, installedApps.label(it.key), it.value) }
-        }
-            .flowOn(Dispatchers.Default)
-            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
-
-    /** Add a suggested app to the focus blocklist. */
-    fun blockSuggested(pkg: String) {
-        viewModelScope.launch {
-            // Adding a block is always allowed (it's stricter), even while locked.
-            weeklyPlanRepo.update { plan ->
-                plan.copy(blockedPackages = plan.blockedPackages.ifEmpty { ScreenTimeNudger.WATCHED_PACKAGES } + pkg)
-            }
-        }
-    }
-
-    /** Weekly plan lock — drives the lock badge on the blocklist. */
-    val weeklyPlan: StateFlow<WeeklyPlanState> = weeklyPlanRepo.state
-
-    /** Refused loosening while the weekly plan is locked, for a snackbar. */
-    val lockMessage = MutableStateFlow<String?>(null)
-
-    /** "Not now": hide the current suggestions for this visit. */
-    fun dismissSuggestions() {
-        dismissedSuggestions.value = dismissedSuggestions.value + blockSuggestions.value.map { it.packageName }
-    }
-    val schedules = scheduleRepo.schedules
-    val syncToLaptop = settings.syncFocusToLaptop
-    val blockSitesOnLaptop = settings.blockSitesOnLaptop
-    val violations: Int get() = manager.violations
-
-    fun setSyncToLaptop(v: Boolean) { viewModelScope.launch { settings.setSyncFocusToLaptop(v) } }
-    fun setBlockSites(v: Boolean) { viewModelScope.launch { settings.setBlockSitesOnLaptop(v) } }
-
-    val apps = MutableStateFlow<List<AppInfo>>(emptyList())
-
-    init {
-        viewModelScope.launch { apps.value = installedApps.launchable() }
-        viewModelScope.launch {
-            weekUsage.value = usageEvents.totalForegroundMillis(System.currentTimeMillis() - WEEK_MS)
-        }
-    }
-
-    fun start(config: FocusConfig, syncToLaptop: Boolean, blockSites: Boolean) =
-        manager.start(config, syncToLaptop, blockSites)
-    fun endEarly() = manager.endEarly()
-    fun clearToIdle() = manager.clearToIdle()
-    fun settleIfComplete() = manager.settleIfComplete()
-    /** Goes through the weekly plan: adding apps always works; removing waits for the weekend. */
-    fun saveBlocked(packages: Set<String>) {
-        viewModelScope.launch {
-            val result = weeklyPlanRepo.update { it.copy(blockedPackages = packages) }
-            if (PlanField.BLOCKED_APPS in result.refused) {
-                lockMessage.value = "Locked by your weekly plan — you can add apps, not remove them."
-            }
-        }
-    }
-    fun label(pkg: String): String = installedApps.label(pkg)
-
-    fun addSchedule(schedule: com.example.touchgrass.features.focus.FocusSchedule) {
-        viewModelScope.launch { scheduleRepo.create(schedule) }
-    }
-    fun deleteSchedule(id: String) {
-        viewModelScope.launch { scheduleRepo.delete(id) }
-    }
-}
-
+/**
+ * The Focus tab, in labelled sections: start a session now, the automatic starters
+ * (schedules, work targets), weekly quotas, the laptop agent, time sinks and your record.
+ */
 @Composable
 fun FocusScreen(
     onOpenLaptopRules: () -> Unit = {},
@@ -222,20 +63,31 @@ fun FocusScreen(
     val recordStats by viewModel.recordStats.collectAsState()
     val recordItems by viewModel.recordItems.collectAsState()
     val suggestions by viewModel.blockSuggestions.collectAsState()
+    val quotaRows by viewModel.quotaRows.collectAsState()
+    val autoFocusTargets by viewModel.autoFocusTargets.collectAsState()
+    val laptopStatus by viewModel.laptopStatus.collectAsState()
     // Track the open row by id so the sheet shows fresh data when sync fills in detail.
     var openRecordId by rememberSaveable { mutableStateOf<Long?>(null) }
     val openRecord = recordItems.firstOrNull { it.primary.id == openRecordId }
+    var schedulesOpen by rememberSaveable { mutableStateOf(false) }
     val remembered by viewModel.rememberedBlocked.collectAsState(initial = emptySet())
     val apps by viewModel.apps.collectAsState()
     val schedules by viewModel.schedules.collectAsState()
 
-    // Accessibility must be on for any blocking to work — refresh on resume.
+    // Always the saved list (or the default seed): a refused removal can't leave the UI out of sync.
+    val blocked = remembered.ifEmpty { ScreenTimeNudger.WATCHED_PACKAGES }
+    val canRemoveBlocked = !weeklyPlan.locked || PlanField.BLOCKED_APPS in weeklyPlan.readyUnlocks
+
+    // Accessibility must be on for any blocking to work; laptop status goes stale — refresh on resume.
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     var accessibilityOn by remember { mutableStateOf(isAccessibilityEnabled(context)) }
     DisposableEffect(lifecycleOwner) {
         val obs = LifecycleEventObserver { _, e ->
-            if (e == Lifecycle.Event.ON_RESUME) accessibilityOn = isAccessibilityEnabled(context)
+            if (e == Lifecycle.Event.ON_RESUME) {
+                accessibilityOn = isAccessibilityEnabled(context)
+                viewModel.refreshLaptop()
+            }
         }
         lifecycleOwner.lifecycle.addObserver(obs)
         onDispose { lifecycleOwner.lifecycle.removeObserver(obs) }
@@ -264,44 +116,38 @@ fun FocusScreen(
             .background(Ink)
             .verticalScroll(rememberScrollState())
             .padding(20.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
+        verticalArrangement = Arrangement.spacedBy(24.dp)
     ) {
-        Spacer(Modifier.height(8.dp))
-        Text("Focus", color = TextPrimary, fontSize = 24.sp, fontWeight = FontWeight.ExtraBold)
-        Text(
-            "Block distractions in Pomodoro cycles. Stay on task, earn the streak.",
-            color = TextSecondary, fontSize = 13.sp, textAlign = TextAlign.Center
-        )
-        Spacer(Modifier.height(20.dp))
+        Column {
+            Spacer(Modifier.height(8.dp))
+            Text("Focus", color = TextPrimary, fontSize = 24.sp, fontWeight = FontWeight.ExtraBold)
+            Text("Block distractions and get real work done.", color = TextSecondary, fontSize = 13.sp)
+        }
 
         if (!accessibilityOn) {
             AccessibilityWarning(onEnable = {
-                context.startActivity(
-                    android.content.Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS)
-                )
+                context.startActivity(android.content.Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS))
             })
-            Spacer(Modifier.height(16.dp))
-        }
-
-        if (phase == FocusPhase.Idle && weeklyPlan.locked) {
-            WeeklyLockBadge(weeklyPlan, onClick = onOpenWeeklyPlan)
-            Spacer(Modifier.height(10.dp))
         }
 
         when (phase) {
-            FocusPhase.Idle -> SetupCard(
-                apps = apps,
-                remembered = remembered,
-                labelOf = viewModel::label,
-                syncToLaptop = syncToLaptop,
-                blockSites = blockSites,
-                onSetSyncToLaptop = viewModel::setSyncToLaptop,
-                onSetBlockSites = viewModel::setBlockSites,
-                onOpenLaptopRules = onOpenLaptopRules,
-                onOpenWorkTargets = onOpenWorkTargets,
-                onStart = { cfg, sync, block -> viewModel.start(cfg, sync, block) },
-                onSaveBlocked = { viewModel.saveBlocked(it) }
-            )
+            FocusPhase.Idle -> FocusSection(
+                label = "Start now",
+                explanation = "Block your distracting apps for a set time."
+            ) {
+                StartNowCard(
+                    blocked = blocked,
+                    lockedBlocked = if (canRemoveBlocked) emptySet() else remembered,
+                    apps = apps,
+                    labelOf = viewModel::label,
+                    syncToLaptop = syncToLaptop,
+                    blockSites = blockSites,
+                    onSetSyncToLaptop = viewModel::setSyncToLaptop,
+                    onSetBlockSites = viewModel::setBlockSites,
+                    onStart = { cfg, sync, block -> viewModel.start(cfg, sync, block) },
+                    onSaveBlocked = viewModel::saveBlocked
+                )
+            }
             is FocusPhase.Focusing -> RunningCard(
                 title = "Focusing",
                 subtitle = "Cycle ${phase.cycle} of ${phase.totalCycles}  ·  distractions blocked",
@@ -325,656 +171,65 @@ fun FocusScreen(
             FocusPhase.Done -> DoneCard(violations = viewModel.violations, onClear = { viewModel.clearToIdle() })
         }
 
-        if (phase == FocusPhase.Idle && suggestions.isNotEmpty()) {
-            Spacer(Modifier.height(16.dp))
-            BlockSuggestionsCard(
-                items = suggestions,
-                onBlock = viewModel::blockSuggested,
-                onDismiss = viewModel::dismissSuggestions
+        FocusSection(
+            label = "Automatic focus",
+            explanation = "Let focus start by itself — at set times, or when you open a work project on your laptop."
+        ) {
+            AutomaticFocusTiles(
+                scheduleCount = schedules.count { it.enabled },
+                schedulesOpen = schedulesOpen,
+                autoFocusTargets = autoFocusTargets,
+                onToggleSchedules = { schedulesOpen = !schedulesOpen },
+                onOpenWorkTargets = onOpenWorkTargets
             )
+            if (schedulesOpen) {
+                Spacer(Modifier.height(10.dp))
+                ScheduleSection(
+                    schedules = schedules,
+                    blocked = remembered,
+                    onAdd = { viewModel.addSchedule(it) },
+                    onDelete = { viewModel.deleteSchedule(it) }
+                )
+            }
         }
 
-        Spacer(Modifier.height(24.dp))
-        ScheduleSection(
-            schedules = schedules,
-            blocked = remembered,
-            onAdd = { viewModel.addSchedule(it) },
-            onDelete = { viewModel.deleteSchedule(it) }
-        )
-        Spacer(Modifier.height(24.dp))
-        RecordSection(stats = recordStats, items = recordItems, onOpen = { openRecordId = it.primary.id })
-        Spacer(Modifier.height(24.dp))
+        FocusSection(
+            label = "Weekly quotas",
+            explanation = "Minimum time you commit to spend on a laptop project each week.",
+            trailing = { WeeklyLockBadge(weeklyPlan, onClick = onOpenWeeklyPlan) }
+        ) {
+            WeeklyQuotasCard(rows = quotaRows, onManage = onOpenWorkTargets)
+        }
+
+        FocusSection(
+            label = "Laptop",
+            explanation = "The TouchGrass agent on your computer tracks work time and blocks distractions there."
+        ) {
+            LaptopCard(status = laptopStatus, onOpenLaptopRules = onOpenLaptopRules)
+        }
+
+        if (phase == FocusPhase.Idle && suggestions.isNotEmpty()) {
+            FocusSection(
+                label = "Time sinks",
+                explanation = "Social & entertainment apps you used most this week that focus doesn't block yet."
+            ) {
+                BlockSuggestionsCard(
+                    items = suggestions,
+                    onBlock = viewModel::blockSuggested,
+                    onDismiss = viewModel::dismissSuggestions
+                )
+            }
+        }
+
+        FocusSection(
+            label = "Your record",
+            explanation = "Every focus session on your phone and laptop. Tap one for details."
+        ) {
+            RecordSection(stats = recordStats, items = recordItems, onOpen = { openRecordId = it.primary.id })
+        }
     }
 
     openRecord?.let { item ->
         SessionDetailSheet(item = item, phoneLabel = viewModel::label, onDismiss = { openRecordId = null })
-    }
-}
-
-@Composable
-private fun SetupCard(
-    apps: List<AppInfo>,
-    remembered: Set<String>,
-    labelOf: (String) -> String,
-    syncToLaptop: Boolean,
-    blockSites: Boolean,
-    onSetSyncToLaptop: (Boolean) -> Unit,
-    onSetBlockSites: (Boolean) -> Unit,
-    onOpenLaptopRules: () -> Unit,
-    onOpenWorkTargets: () -> Unit,
-    onStart: (FocusConfig, Boolean, Boolean) -> Unit,
-    onSaveBlocked: (Set<String>) -> Unit
-) {
-    var focus by remember { mutableIntStateOf(25) }
-    var brk by remember { mutableIntStateOf(5) }
-    var cycles by remember { mutableIntStateOf(4) }
-    var strict by remember { mutableStateOf(false) }
-    var pickerOpen by remember { mutableStateOf(false) }
-    var sync by remember(syncToLaptop) { mutableStateOf(syncToLaptop) }
-    var blockSitesOn by remember(blockSites) { mutableStateOf(blockSites) }
-
-    // Selected blocklist: remembered choice, else the default watched-apps seed.
-    var selected by remember(remembered) {
-        mutableStateOf(remembered.ifEmpty { ScreenTimeNudger.WATCHED_PACKAGES })
-    }
-
-    val cappedBreak = FocusConfig.capBreak(focus, brk)
-    val totalMin = cycles * focus + (cycles - 1).coerceAtLeast(0) * cappedBreak
-
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(20.dp))
-            .background(InkElevated)
-            .border(1.dp, InkBorder, RoundedCornerShape(20.dp))
-            .padding(20.dp)
-    ) {
-        StepperRow("Focus block", "$focus min", { focus = (focus - 5).coerceAtLeast(FocusConfig.MIN_FOCUS) }) {
-            focus = (focus + 5).coerceAtMost(FocusConfig.MAX_FOCUS)
-        }
-        Spacer(Modifier.height(14.dp))
-        StepperRow("Break", "$cappedBreak min", { brk = (brk - 5).coerceAtLeast(FocusConfig.MIN_BREAK) }) {
-            brk = (brk + 5)
-        }
-        Spacer(Modifier.height(14.dp))
-        StepperRow("Cycles", "$cycles", { cycles = (cycles - 1).coerceAtLeast(1) }) {
-            cycles = (cycles + 1).coerceAtMost(FocusConfig.MAX_CYCLES)
-        }
-
-        Spacer(Modifier.height(14.dp))
-        // Blocked apps row → opens the picker.
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(12.dp))
-                .clickable { pickerOpen = true }
-                .padding(vertical = 6.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text("Blocked apps", color = TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
-            Text(
-                "${selected.size} selected  ›",
-                color = GrassGreen, fontSize = 14.sp, fontWeight = FontWeight.Bold
-            )
-        }
-
-        Spacer(Modifier.height(14.dp))
-        // Strict (unkillable) toggle.
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text("Strict mode", color = TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
-                Text(
-                    "Locks you in — no End button, ongoing reminder until the session finishes.",
-                    color = TextSecondary, fontSize = 11.sp
-                )
-            }
-            Spacer(Modifier.size(12.dp))
-            Switch(
-                checked = strict,
-                onCheckedChange = { strict = it },
-                colors = SwitchDefaults.colors(
-                    checkedThumbColor = Ink,
-                    checkedTrackColor = GrassGreen,
-                    uncheckedTrackColor = InkBorder
-                )
-            )
-        }
-
-        Spacer(Modifier.height(16.dp))
-        // ---- Laptop (cross-device) ----
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text("Sync to laptop", color = TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
-                Text(
-                    "Also start this session on your laptop agent.",
-                    color = TextSecondary, fontSize = 11.sp
-                )
-            }
-            Spacer(Modifier.size(12.dp))
-            Switch(
-                checked = sync,
-                onCheckedChange = { sync = it; onSetSyncToLaptop(it) },
-                colors = SwitchDefaults.colors(checkedThumbColor = Ink, checkedTrackColor = GrassGreen, uncheckedTrackColor = InkBorder)
-            )
-        }
-        if (sync) {
-            Spacer(Modifier.height(12.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text("Block sites on laptop", color = TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
-                    Text(
-                        "Null-route your blocked sites (e.g. YouTube) during this session.",
-                        color = TextSecondary, fontSize = 11.sp
-                    )
-                }
-                Spacer(Modifier.size(12.dp))
-                Switch(
-                    checked = blockSitesOn,
-                    onCheckedChange = { blockSitesOn = it; onSetBlockSites(it) },
-                    colors = SwitchDefaults.colors(checkedThumbColor = Ink, checkedTrackColor = GrassGreen, uncheckedTrackColor = InkBorder)
-                )
-            }
-            Spacer(Modifier.height(10.dp))
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(12.dp))
-                    .clickable { onOpenLaptopRules() }
-                    .padding(vertical = 6.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text("Laptop rules", color = TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
-                Text("apps & sites  ›", color = GrassGreen, fontSize = 14.sp, fontWeight = FontWeight.Bold)
-            }
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(12.dp))
-                    .clickable { onOpenWorkTargets() }
-                    .padding(vertical = 6.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text("Work targets", color = TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
-                Text("quotas & auto-focus  ›", color = GrassGreen, fontSize = 14.sp, fontWeight = FontWeight.Bold)
-            }
-        }
-
-        Spacer(Modifier.height(14.dp))
-        Text("Total $totalMin min  ·  ${selected.size} apps blocked", color = AmberWarn, fontSize = 12.sp)
-        Spacer(Modifier.height(16.dp))
-        Button(
-            onClick = {
-                onStart(
-                    FocusConfig(
-                        focusBlockMin = focus,
-                        breakMin = cappedBreak,
-                        cycles = cycles,
-                        blockedPackages = selected,
-                        strict = strict
-                    ),
-                    sync,
-                    blockSitesOn
-                )
-            },
-            enabled = selected.isNotEmpty(),
-            modifier = Modifier.fillMaxWidth().height(52.dp),
-            shape = RoundedCornerShape(16.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = GrassGreen, contentColor = Ink)
-        ) {
-            Text("Start focus session", fontSize = 15.sp, fontWeight = FontWeight.Bold)
-        }
-    }
-
-    if (pickerOpen) {
-        AppPickerDialog(
-            apps = apps,
-            labelOf = labelOf,
-            initiallySelected = selected,
-            onDismiss = { pickerOpen = false },
-            onConfirm = {
-                selected = it
-                onSaveBlocked(it)
-                pickerOpen = false
-            }
-        )
-    }
-}
-
-@Composable
-internal fun AppPickerDialog(
-    apps: List<AppInfo>,
-    labelOf: (String) -> String,
-    initiallySelected: Set<String>,
-    onDismiss: () -> Unit,
-    onConfirm: (Set<String>) -> Unit
-) {
-    var query by remember { mutableStateOf("") }
-    val chosen = remember { mutableStateOf(initiallySelected) }
-
-    // Ensure already-selected packages that aren't launchable (or not yet loaded)
-    // still appear so they can be unchecked.
-    val known = remember(apps) { apps.associateBy { it.packageName } }
-    val extra = initiallySelected.filter { it !in known }.map { AppInfo(it, labelOf(it)) }
-    val all = (extra + apps)
-    val filtered = all.filter { it.label.contains(query, ignoreCase = true) }
-
-    Dialog(onDismissRequest = onDismiss) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(20.dp))
-                .background(InkElevated)
-                .border(1.dp, InkBorder, RoundedCornerShape(20.dp))
-                .padding(16.dp)
-        ) {
-            Text("Block during focus", color = TextPrimary, fontSize = 17.sp, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.height(4.dp))
-            Text("${chosen.value.size} selected", color = GrassGreen, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-            Spacer(Modifier.height(10.dp))
-            OutlinedTextField(
-                value = query,
-                onValueChange = { query = it },
-                placeholder = { Text("Search apps", color = TextSecondary) },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth()
-            )
-            Spacer(Modifier.height(10.dp))
-            LazyColumn(modifier = Modifier.fillMaxWidth().heightIn(max = 360.dp)) {
-                items(filtered, key = { it.packageName }) { app ->
-                    val isChecked = app.packageName in chosen.value
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable {
-                                chosen.value = if (isChecked) chosen.value - app.packageName
-                                else chosen.value + app.packageName
-                            }
-                            .padding(vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Checkbox(
-                            checked = isChecked,
-                            onCheckedChange = { on ->
-                                chosen.value = if (on) chosen.value + app.packageName
-                                else chosen.value - app.packageName
-                            },
-                            colors = CheckboxDefaults.colors(checkedColor = GrassGreen, checkmarkColor = Ink)
-                        )
-                        Spacer(Modifier.size(6.dp))
-                        Text(app.label, color = TextPrimary, fontSize = 14.sp)
-                    }
-                }
-            }
-            Spacer(Modifier.height(12.dp))
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                Text(
-                    "Cancel",
-                    color = TextSecondary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.clickable { onDismiss() }.padding(12.dp)
-                )
-                Spacer(Modifier.size(8.dp))
-                Text(
-                    "Done",
-                    color = GrassGreen, fontSize = 14.sp, fontWeight = FontWeight.Bold,
-                    modifier = Modifier.clickable { onConfirm(chosen.value) }.padding(12.dp)
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun RunningCard(
-    title: String,
-    subtitle: String,
-    bigTime: String,
-    caption: String,
-    accent: androidx.compose.ui.graphics.Color,
-    violations: Int,
-    strict: Boolean,
-    onEnd: () -> Unit
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(20.dp))
-            .background(InkElevated)
-            .border(1.dp, accent.copy(alpha = 0.4f), RoundedCornerShape(20.dp))
-            .padding(24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Text(title.uppercase(), color = accent, fontSize = 13.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
-        Spacer(Modifier.height(8.dp))
-        Text(bigTime, color = TextPrimary, fontSize = 60.sp, fontWeight = FontWeight.Black)
-        Spacer(Modifier.height(4.dp))
-        Text(subtitle, color = TextSecondary, fontSize = 13.sp, textAlign = TextAlign.Center)
-        Spacer(Modifier.height(2.dp))
-        Text(caption, color = TextSecondary, fontSize = 12.sp)
-        if (violations > 0) {
-            Spacer(Modifier.height(10.dp))
-            Text("$violations distraction${if (violations == 1) "" else "s"} blocked", color = DangerRed, fontSize = 12.sp)
-        }
-        Spacer(Modifier.height(18.dp))
-        if (strict) {
-            Text("🔒 Strict — locked in until the session ends", color = AmberWarn, fontSize = 12.sp, textAlign = TextAlign.Center)
-        } else {
-            Button(
-                onClick = onEnd,
-                modifier = Modifier.fillMaxWidth().height(48.dp),
-                shape = RoundedCornerShape(16.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = InkBorder, contentColor = TextPrimary)
-            ) {
-                Text("End session", fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-            }
-        }
-    }
-}
-
-@Composable
-private fun DoneCard(violations: Int, onClear: () -> Unit) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(20.dp))
-            .background(InkElevated)
-            .border(1.dp, GrassGreen.copy(alpha = 0.4f), RoundedCornerShape(20.dp))
-            .padding(24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Text("SESSION COMPLETE", color = GrassGreen, fontSize = 13.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
-        Spacer(Modifier.height(8.dp))
-        Text(
-            if (violations == 0) "Clean run — no distractions." else "$violations distraction${if (violations == 1) "" else "s"} blocked.",
-            color = TextSecondary, fontSize = 14.sp, textAlign = TextAlign.Center
-        )
-        Spacer(Modifier.height(18.dp))
-        Button(
-            onClick = onClear,
-            modifier = Modifier.fillMaxWidth().height(48.dp),
-            shape = RoundedCornerShape(16.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = GrassGreen, contentColor = Ink)
-        ) {
-            Text("New session", fontSize = 14.sp, fontWeight = FontWeight.Bold)
-        }
-    }
-}
-
-@Composable
-private fun StepperRow(label: String, value: String, onMinus: () -> Unit, onPlus: () -> Unit) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(label, color = TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            RoundBtn("−", onMinus)
-            Text(value, color = GrassGreen, fontSize = 16.sp, fontWeight = FontWeight.Bold,
-                textAlign = TextAlign.Center, modifier = Modifier.padding(horizontal = 12.dp))
-            RoundBtn("+", onPlus)
-        }
-    }
-}
-
-@Composable
-private fun RoundBtn(symbol: String, onClick: () -> Unit) {
-    Box(
-        modifier = Modifier
-            .size(36.dp)
-            .clip(CircleShape)
-            .background(InkBorder)
-            .clickable(onClick = onClick),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(symbol, color = TextPrimary, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-    }
-}
-
-private fun mmss(totalSec: Long): String {
-    val s = totalSec.coerceAtLeast(0)
-    return "%d:%02d".format(s / 60, s % 60)
-}
-
-// ---- accessibility gate ----
-
-@Composable
-private fun AccessibilityWarning(onEnable: () -> Unit) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
-            .background(DangerRed.copy(alpha = 0.12f))
-            .border(1.dp, DangerRed.copy(alpha = 0.5f), RoundedCornerShape(16.dp))
-            .padding(16.dp)
-    ) {
-        Text("Accessibility is off", color = DangerRed, fontSize = 14.sp, fontWeight = FontWeight.Bold)
-        Spacer(Modifier.height(4.dp))
-        Text(
-            "Focus sessions can't block apps until TouchGrass's accessibility service is on. " +
-                "Scheduled sessions still start, but nothing will be blocked.",
-            color = TextSecondary, fontSize = 12.sp, lineHeight = 16.sp
-        )
-        Spacer(Modifier.height(12.dp))
-        Button(
-            onClick = onEnable,
-            modifier = Modifier.fillMaxWidth().height(44.dp),
-            shape = RoundedCornerShape(12.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = DangerRed, contentColor = Ink)
-        ) { Text("Turn on accessibility", fontSize = 13.sp, fontWeight = FontWeight.Bold) }
-    }
-}
-
-// ---- recurring schedules ----
-
-@Composable
-private fun ScheduleSection(
-    schedules: List<FocusSchedule>,
-    blocked: Set<String>,
-    onAdd: (FocusSchedule) -> Unit,
-    onDelete: (String) -> Unit
-) {
-    var showDialog by remember { mutableStateOf(false) }
-    var editing by remember { mutableStateOf<FocusSchedule?>(null) }
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(20.dp))
-            .background(InkElevated)
-            .border(1.dp, InkBorder, RoundedCornerShape(20.dp))
-            .padding(20.dp)
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text("Scheduled", color = TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
-            Text(
-                "+ Add",
-                color = GrassGreen, fontSize = 14.sp, fontWeight = FontWeight.Bold,
-                modifier = Modifier.clip(RoundedCornerShape(50)).clickable { editing = null; showDialog = true }
-                    .padding(horizontal = 10.dp, vertical = 4.dp)
-            )
-        }
-        if (schedules.isEmpty()) {
-            Spacer(Modifier.height(10.dp))
-            Text("No schedules yet — auto-start focus at a set time, daily or on chosen days.",
-                color = TextSecondary, fontSize = 12.sp)
-        } else {
-            schedules.forEach { s ->
-                Spacer(Modifier.height(12.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth()
-                        .clip(RoundedCornerShape(10.dp))
-                        .clickable { editing = s; showDialog = true }
-                        .padding(vertical = 2.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(Modifier.weight(1f)) {
-                        Text("${s.timeLabel}  ·  ${s.daysLabel}", color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-                        Text(
-                            "${s.totalMinutes}m (${s.cycles}×${s.focusBlockMin}m)" +
-                                (if (s.reminders.isNotEmpty()) " · reminders on" else ""),
-                            color = TextSecondary, fontSize = 11.sp
-                        )
-                    }
-                    Text("Edit", color = GrassGreen, fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.clickable { editing = s; showDialog = true }.padding(6.dp))
-                    Text("Remove", color = DangerRed, fontSize = 12.sp,
-                        modifier = Modifier.clickable { onDelete(s.id) }.padding(6.dp))
-                }
-            }
-        }
-    }
-    if (showDialog) {
-        ScheduleDialog(
-            editing = editing,
-            blocked = blocked,
-            onDismiss = { showDialog = false },
-            onConfirm = { onAdd(it); showDialog = false }
-        )
-    }
-}
-
-@Composable
-private fun ScheduleDialog(
-    editing: FocusSchedule?,
-    blocked: Set<String>,
-    onDismiss: () -> Unit,
-    onConfirm: (FocusSchedule) -> Unit
-) {
-    var hour by remember { mutableIntStateOf(editing?.hour ?: 9) }
-    var minute by remember { mutableIntStateOf(editing?.minute ?: 0) }
-    var everyDay by remember { mutableStateOf(editing?.days == null) }
-    var days by remember { mutableStateOf(editing?.days ?: FocusSchedule.WEEKDAYS) }
-    var focus by remember { mutableIntStateOf(editing?.focusBlockMin ?: 25) }
-    var brk by remember { mutableIntStateOf(editing?.breakMin ?: 5) }
-    var cycles by remember { mutableIntStateOf(editing?.cycles ?: 4) }
-    var reminders by remember { mutableStateOf(editing?.reminders ?: setOf(5)) }
-
-    val cappedBreak = FocusConfig.capBreak(focus, brk)
-    val total = cycles * focus + (cycles - 1).coerceAtLeast(0) * cappedBreak
-    val canConfirm = everyDay || days.isNotEmpty()
-
-    Dialog(onDismissRequest = onDismiss) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(20.dp))
-                .background(InkElevated)
-                .border(1.dp, InkBorder, RoundedCornerShape(20.dp))
-                .verticalScroll(rememberScrollState())
-                .padding(18.dp)
-        ) {
-            Text(if (editing == null) "New schedule" else "Edit schedule", color = TextPrimary, fontSize = 17.sp, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.height(14.dp))
-            StepperRow("Hour", "%02d".format(hour), { hour = (hour + 23) % 24 }) { hour = (hour + 1) % 24 }
-            Spacer(Modifier.height(10.dp))
-            StepperRow("Minute", "%02d".format(minute), { minute = (minute + 55) % 60 }) { minute = (minute + 5) % 60 }
-            Spacer(Modifier.height(14.dp))
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text("Every day", color = TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
-                Switch(
-                    checked = everyDay,
-                    onCheckedChange = { everyDay = it },
-                    colors = SwitchDefaults.colors(checkedThumbColor = Ink, checkedTrackColor = GrassGreen, uncheckedTrackColor = InkBorder)
-                )
-            }
-            if (!everyDay) {
-                Spacer(Modifier.height(8.dp))
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    DayOfWeek.values().forEach { d ->
-                        val sel = d in days
-                        Box(
-                            modifier = Modifier
-                                .size(34.dp)
-                                .clip(CircleShape)
-                                .background(if (sel) GrassGreen else Ink)
-                                .border(1.dp, if (sel) GrassGreen else InkBorder, CircleShape)
-                                .clickable { days = if (sel) days - d else days + d },
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(d.name.take(1), color = if (sel) Ink else TextPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                        }
-                    }
-                }
-            }
-
-            Spacer(Modifier.height(14.dp))
-            StepperRow("Focus block", "$focus min", { focus = (focus - 5).coerceAtLeast(FocusConfig.MIN_FOCUS) }) { focus = (focus + 5).coerceAtMost(FocusConfig.MAX_FOCUS) }
-            Spacer(Modifier.height(10.dp))
-            StepperRow("Break", "$cappedBreak min", { brk = (brk - 5).coerceAtLeast(FocusConfig.MIN_BREAK) }) { brk += 5 }
-            Spacer(Modifier.height(10.dp))
-            StepperRow("Cycles", "$cycles", { cycles = (cycles - 1).coerceAtLeast(1) }) { cycles = (cycles + 1).coerceAtMost(FocusConfig.MAX_CYCLES) }
-
-            Spacer(Modifier.height(10.dp))
-            Text("Total $total min per run", color = AmberWarn, fontSize = 12.sp)
-
-            Spacer(Modifier.height(14.dp))
-            Text("Remind me before", color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-            Spacer(Modifier.height(6.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FocusScheduleScheduler.REMINDER_OFFSETS.forEach { m ->
-                    val sel = m in reminders
-                    val label = when (m) { 60 -> "1h"; else -> "${m}m" }
-                    Text(
-                        label,
-                        color = if (sel) Ink else TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(50))
-                            .background(if (sel) GrassGreen else Ink)
-                            .border(1.dp, if (sel) GrassGreen else InkBorder, RoundedCornerShape(50))
-                            .clickable { reminders = if (sel) reminders - m else reminders + m }
-                            .padding(horizontal = 14.dp, vertical = 7.dp)
-                    )
-                }
-            }
-
-            Spacer(Modifier.height(16.dp))
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                Text("Cancel", color = TextSecondary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.clickable { onDismiss() }.padding(12.dp))
-                Spacer(Modifier.size(8.dp))
-                Text(if (editing == null) "Add" else "Save", color = if (canConfirm) GrassGreen else TextSecondary, fontSize = 14.sp, fontWeight = FontWeight.Bold,
-                    modifier = Modifier.clickable(enabled = canConfirm) {
-                        onConfirm(
-                            FocusSchedule(
-                                id = editing?.id ?: "",
-                                title = "Focus",
-                                days = if (everyDay) null else days,
-                                hour = hour,
-                                minute = minute,
-                                focusBlockMin = focus,
-                                breakMin = cappedBreak,
-                                cycles = cycles,
-                                blockedPackages = blocked.ifEmpty { ScreenTimeNudger.WATCHED_PACKAGES },
-                                reminders = reminders,
-                                enabled = true
-                            )
-                        )
-                    }.padding(12.dp))
-            }
-        }
     }
 }

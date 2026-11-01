@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 const POLL_SECS: u64 = 20;
 const SAMPLE_SECS: u64 = 5;
 const SYNC_SECS: u64 = 60;
+const HEARTBEAT_SECS: u64 = 5 * 60;
 
 type ProjectUploads = Vec<((String, String), Instant)>;
 
@@ -93,6 +94,7 @@ pub fn watch(cfg: &mut Config) -> Result<()> {
 
     let mut sb = crate::authed(cfg)?;
     let _ = sb.upsert_device(&device_id, &name);
+    let mut last_heartbeat = Instant::now();
     let mut last_auth = Instant::now();
     let mut handled_live: Option<String> = None;
     let mut tracker = Tracker::new();
@@ -141,6 +143,11 @@ pub fn watch(cfg: &mut Config) -> Result<()> {
         if last_sync.is_none_or(|at| at.elapsed() >= Duration::from_secs(SYNC_SECS)) {
             last_sync = Some(Instant::now());
             usage::flush(&sb, &device_id);
+        }
+        // Heartbeat so the phone can show the agent as online while the laptop is idle.
+        if last_heartbeat.elapsed() >= Duration::from_secs(HEARTBEAT_SECS) {
+            last_heartbeat = Instant::now();
+            let _ = sb.upsert_device(&device_id, &name);
         }
         if last_targets.is_none_or(|at| at.elapsed() >= Duration::from_secs(SYNC_SECS)) {
             last_targets = Some(Instant::now());

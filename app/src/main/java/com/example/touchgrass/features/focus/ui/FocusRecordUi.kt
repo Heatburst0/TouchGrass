@@ -53,7 +53,7 @@ private val recordDateFmt = SimpleDateFormat("MMM d, h:mm a", Locale.getDefault(
 
 // ---------------------------------------------------------------- suggestions
 
-/** "Time sinks this week": distracting apps you used most that focus doesn't block yet. */
+/** "Time sinks this week": distracting apps you used most that focus doesn't block yet (the section labels it). */
 @Composable
 fun BlockSuggestionsCard(
     items: List<BlockSuggestion>,
@@ -61,15 +61,8 @@ fun BlockSuggestionsCard(
     onDismiss: () -> Unit
 ) {
     InsightCard {
-        Text("SUGGESTED BLOCKS", color = AmberWarn, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-        Spacer(Modifier.height(4.dp))
-        Text("Time sinks this week", color = TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
-        Text(
-            "Social & entertainment apps you used most that focus doesn't block yet.",
-            color = TextSecondary, fontSize = 12.sp
-        )
-        items.forEach { s ->
-            Spacer(Modifier.height(12.dp))
+        items.forEachIndexed { i, s ->
+            if (i > 0) Spacer(Modifier.height(12.dp))
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
                 Monogram(s.label)
                 Spacer(Modifier.size(12.dp))
@@ -102,8 +95,6 @@ fun BlockSuggestionsCard(
 @Composable
 fun RecordSection(stats: FocusStats, items: List<RecordItem>, onOpen: (RecordItem) -> Unit) {
     InsightCard {
-        Text("Your record", color = TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
-        Spacer(Modifier.height(10.dp))
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             RecordStat("${stats.completed}", "successful")
             RecordStat("${stats.total}", "started")

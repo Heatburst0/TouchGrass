@@ -1,6 +1,7 @@
 package com.example.touchgrass.features.worktargets
 
 import java.time.DayOfWeek
+import java.time.Instant
 import java.time.LocalDate
 
 /**
@@ -34,6 +35,13 @@ data class AppUsageRow(
     val appName: String,
     val project: String,   // "" when the agent couldn't tell
     val activeSeconds: Int
+)
+
+/** One device_projects row: a project the laptop agent found in an IDE's recent-project list. */
+data class DeviceProject(
+    val appName: String,     // lowercased window app name, as in device_apps
+    val project: String,     // folder name only
+    val lastSeen: Instant?
 )
 
 /** Pure quota math over app_usage rows. */

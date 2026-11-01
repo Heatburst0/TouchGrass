@@ -5,7 +5,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -15,11 +14,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
@@ -59,6 +55,8 @@ import com.example.touchgrass.features.reading.ui.PointsChip
 import com.example.touchgrass.features.weeklyplan.WeeklyPlanRepository
 import com.example.touchgrass.features.weeklyplan.WeeklyPlanState
 import com.example.touchgrass.presentation.tools.NUDGE_INTERVAL_CHOICES
+import com.example.touchgrass.ui.components.BackTopBar
+import com.example.touchgrass.ui.components.ValueSlider
 import com.example.touchgrass.ui.theme.AmberWarn
 import com.example.touchgrass.ui.theme.GrassGreen
 import com.example.touchgrass.ui.theme.Ink
@@ -77,8 +75,8 @@ import javax.inject.Inject
 
 private const val SHORTS_MIN = 1
 private const val SHORTS_MAX = 50
-private const val PAGES_STEP = 10
-private const val PAGES_MAX = 2000
+private const val PAGES_STEP = 5
+private const val PAGES_MAX = 500
 private const val REFRESH_MS = 30_000L
 private const val HOUR_MS = 3_600_000L
 
@@ -131,6 +129,7 @@ class WeeklyPlanViewModel @Inject constructor(
 @Composable
 fun WeeklyPlanScreen(
     onOpenWorkTargets: () -> Unit = {},
+    onBack: () -> Unit = {},
     viewModel: WeeklyPlanViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsState()
@@ -166,17 +165,12 @@ fun WeeklyPlanScreen(
             .padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column {
-                Text("Weekly plan", color = TextPrimary, fontSize = 24.sp, fontWeight = FontWeight.ExtraBold)
-                Text("Set it once, stick to it Mon–Fri", color = TextSecondary, fontSize = 13.sp)
-            }
-            PointsChip(points)
-        }
+        BackTopBar(
+            title = "Weekly plan",
+            subtitle = "Set it once, stick to it Mon–Fri",
+            onBack = onBack,
+            trailing = { PointsChip(points) }
+        )
 
         StatusBanner(state)
 
@@ -210,12 +204,13 @@ fun WeeklyPlanScreen(
         }
 
         PlanCard("Shorts daily limit", "Blocks Shorts after this many videos", { lockStatus(PlanField.SHORTS_LIMIT) }) {
-            Stepper(
-                value = "${plan.shortsDailyLimit}",
-                minusEnabled = plan.shortsDailyLimit > SHORTS_MIN,
-                plusEnabled = plan.shortsDailyLimit < SHORTS_MAX && canLoosen(PlanField.SHORTS_LIMIT),
-                onMinus = { viewModel.edit(PlanField.SHORTS_LIMIT) { it.copy(shortsDailyLimit = it.shortsDailyLimit - 1) } },
-                onPlus = { viewModel.edit(PlanField.SHORTS_LIMIT) { it.copy(shortsDailyLimit = it.shortsDailyLimit + 1) } }
+            ValueSlider(
+                label = "Videos a day",
+                value = plan.shortsDailyLimit,
+                range = SHORTS_MIN..SHORTS_MAX,
+                onValueChange = { v -> viewModel.edit(PlanField.SHORTS_LIMIT) { it.copy(shortsDailyLimit = v) } },
+                lockedMax = if (canLoosen(PlanField.SHORTS_LIMIT)) null else plan.shortsDailyLimit,
+                lockReason = weeklyLockHint(state, PlanField.SHORTS_LIMIT, LockDirection.DOWN)
             )
         }
 
@@ -230,16 +225,15 @@ fun WeeklyPlanScreen(
         }
 
         PlanCard("Reading", "Pages to read this week (0 = no target)", { lockStatus(PlanField.WEEKLY_PAGES) }) {
-            Stepper(
-                value = "${plan.weeklyReadingPages} pages",
-                minusEnabled = plan.weeklyReadingPages > 0 && canLoosen(PlanField.WEEKLY_PAGES),
-                plusEnabled = plan.weeklyReadingPages < PAGES_MAX,
-                onMinus = {
-                    viewModel.edit(PlanField.WEEKLY_PAGES) {
-                        it.copy(weeklyReadingPages = (it.weeklyReadingPages - PAGES_STEP).coerceAtLeast(0))
-                    }
-                },
-                onPlus = { viewModel.edit(PlanField.WEEKLY_PAGES) { it.copy(weeklyReadingPages = it.weeklyReadingPages + PAGES_STEP) } }
+            ValueSlider(
+                label = "Pages this week",
+                value = plan.weeklyReadingPages,
+                range = 0..PAGES_MAX,
+                step = PAGES_STEP,
+                format = { if (it == 0) "Off" else "$it" },
+                onValueChange = { v -> viewModel.edit(PlanField.WEEKLY_PAGES) { it.copy(weeklyReadingPages = v) } },
+                lockedMin = if (canLoosen(PlanField.WEEKLY_PAGES)) null else plan.weeklyReadingPages,
+                lockReason = weeklyLockHint(state, PlanField.WEEKLY_PAGES, LockDirection.UP)
             )
             val read = pagesRead
             if (plan.weeklyReadingPages > 0 && read != null) {
@@ -347,6 +341,7 @@ fun WeeklyPlanScreen(
             apps = apps,
             labelOf = viewModel::label,
             initiallySelected = plan.blockedPackages,
+            lockedPackages = if (canLoosen(PlanField.BLOCKED_APPS)) emptySet() else plan.blockedPackages,
             onDismiss = { pickerOpen = false },
             onConfirm = { chosen ->
                 viewModel.edit(PlanField.BLOCKED_APPS) { it.copy(blockedPackages = chosen) }
@@ -448,42 +443,6 @@ private fun SwitchRow(label: String, checked: Boolean, enabled: Boolean, onChang
                 disabledCheckedThumbColor = Ink
             )
         )
-    }
-}
-
-@Composable
-private fun Stepper(
-    value: String,
-    minusEnabled: Boolean,
-    plusEnabled: Boolean,
-    onMinus: () -> Unit,
-    onPlus: () -> Unit
-) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.Center,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        RoundButton("−", minusEnabled, onMinus)
-        Text(
-            value, color = GrassGreen, fontSize = 22.sp, fontWeight = FontWeight.ExtraBold,
-            textAlign = TextAlign.Center, modifier = Modifier.width(140.dp)
-        )
-        RoundButton("+", plusEnabled, onPlus)
-    }
-}
-
-@Composable
-private fun RoundButton(symbol: String, enabled: Boolean, onClick: () -> Unit) {
-    Box(
-        modifier = Modifier
-            .size(40.dp)
-            .clip(CircleShape)
-            .background(if (enabled) InkBorder else InkBorder.copy(alpha = 0.35f))
-            .clickable(enabled = enabled, onClick = onClick),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(symbol, color = if (enabled) TextPrimary else TextSecondary.copy(alpha = 0.5f), fontSize = 20.sp, fontWeight = FontWeight.Bold)
     }
 }
 

@@ -152,10 +152,17 @@ impl Supabase {
         expect_ok(resp, &format!("insert into {}", table))
     }
 
+    /// Register this laptop and refresh `last_seen_at` — also the heartbeat the phone
+    /// reads to show "Laptop agent online".
     pub fn upsert_device(&self, id: &str, name: &str) -> Result<()> {
         self.insert(
             "devices",
-            &json!({ "id": id, "platform": "DESKTOP", "name": name }),
+            &json!({
+                "id": id,
+                "platform": "DESKTOP",
+                "name": name,
+                "last_seen_at": chrono::Utc::now().to_rfc3339(),
+            }),
         )
     }
 
