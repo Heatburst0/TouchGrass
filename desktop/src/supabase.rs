@@ -129,8 +129,13 @@ impl Supabase {
 
     // ---- PostgREST ----
 
-    fn access(&self) -> Result<&str> {
+    /// The current JWT, also used to authenticate the Realtime channel.
+    pub fn access_token(&self) -> Result<&str> {
         self.access_token.as_deref().context("not authenticated")
+    }
+
+    fn access(&self) -> Result<&str> {
+        self.access_token()
     }
 
     fn insert<T: Serialize>(&self, table: &str, body: &T) -> Result<()> {

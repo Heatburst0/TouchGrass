@@ -14,6 +14,12 @@ during focus sessions and breaks, and syncs about once a minute. Failed uploads
 are retried in memory (up to 500 app/project/day entries); restarting loses unsent
 usage. Apply the work-targets migration before using these features.
 
+Phone focus starts/stops and rule, schedule, and work-target changes wake the
+agent immediately via Supabase Realtime. Enable the four tables in the project's
+Realtime publication with access allowed by RLS. Polling remains the fallback
+(20 seconds for sessions/rules/schedules, 15 seconds for remote stops, and
+60 seconds for work targets) when Realtime is unavailable.
+
 ## Prerequisites
 
 - **Rust** (stable): install from [rustup.rs](https://rustup.rs).

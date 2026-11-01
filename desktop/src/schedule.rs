@@ -1,5 +1,6 @@
 use crate::config::Config;
 use crate::focus::{run_session, SessionConfig};
+use crate::realtime::{self, Event};
 use crate::supabase::{Policy, RemoteSchedule, WorkTarget};
 use crate::{autofocus::AutoFocus, overlay, project, tracker::Tracker, usage};
 use anyhow::Result;
@@ -8,12 +9,20 @@ use chrono::{
 };
 use chrono_tz::Tz;
 use std::collections::HashSet;
-use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 const POLL_SECS: u64 = 20;
 const SAMPLE_SECS: u64 = 5;
 const SYNC_SECS: u64 = 60;
+
+/// Advance the sampling clock only for a real five-second observation.
+fn sample_due(last: &mut Instant, now: Instant) -> bool {
+    if now.duration_since(*last) < Duration::from_secs(SAMPLE_SECS) {
+        return false;
+    }
+    *last = now;
+    true
+}
 
 /// Sample activity every five seconds; poll schedules/policy separately and
 /// sync usage/targets each minute. Sessions take over sampling while they run.
@@ -32,26 +41,47 @@ pub fn watch(cfg: &mut Config) -> Result<()> {
     let started = Instant::now();
     let mut last_poll: Option<Instant> = None;
     let mut last_sync: Option<Instant> = None;
+    let mut last_targets: Option<Instant> = None;
+    let mut last_sample = Instant::now();
     let mut policy = Policy::default();
     let mut targets: Vec<WorkTarget> = Vec::new();
     let mut autofocus = AutoFocus::default();
     let mut pending_schedule: Option<(DateTime<Utc>, String, SessionConfig)> = None;
 
     loop {
-        sleep(Duration::from_secs(SAMPLE_SECS));
-        let active = tracker.sample_active();
-        let window = tracker.active_window_info();
-        let project = project::parse_project(&window.app, &window.title);
-        if active {
-            usage::record(&window.app, project.as_deref(), SAMPLE_SECS as i64);
+        let interval = Duration::from_secs(SAMPLE_SECS);
+        for event in realtime::wait(interval.saturating_sub(last_sample.elapsed())) {
+            match event {
+                Event::ActiveSession => last_poll = None,
+                Event::Schedules | Event::Policy => {
+                    last_poll = None;
+                    pending_schedule = None; // revalidate imminent starts against changed rules
+                }
+                Event::WorkTargets => last_targets = None,
+            }
         }
-        if !window.app.is_empty() && !seen_apps.contains(&window.app) {
-            pending_apps.insert(window.app.clone());
-        }
+        // Early invalidations can poll, but never create extra usage samples.
+        let sample = if sample_due(&mut last_sample, Instant::now()) {
+            let active = tracker.sample_active();
+            let window = tracker.active_window_info();
+            let project = project::parse_project(&window.app, &window.title);
+            if active {
+                usage::record(&window.app, project.as_deref(), SAMPLE_SECS as i64);
+            }
+            if !window.app.is_empty() && !seen_apps.contains(&window.app) {
+                pending_apps.insert(window.app.clone());
+            }
+            Some((active, window, project))
+        } else {
+            None
+        };
 
         if last_sync.is_none_or(|at| at.elapsed() >= Duration::from_secs(SYNC_SECS)) {
             last_sync = Some(Instant::now());
             usage::flush(&sb, &device_id);
+        }
+        if last_targets.is_none_or(|at| at.elapsed() >= Duration::from_secs(SYNC_SECS)) {
+            last_targets = Some(Instant::now());
             match sb.list_work_targets() {
                 Ok(list) => targets = list,
                 Err(e) => eprintln!("work targets sync: {e}"), // retain last good list
@@ -70,6 +100,7 @@ pub fn watch(cfg: &mut Config) -> Result<()> {
             }
             autofocus.session_finished(started.elapsed().as_secs() as i64);
             tracker = Tracker::new();
+            last_sample = Instant::now();
             continue;
         }
 
@@ -122,6 +153,7 @@ pub fn watch(cfg: &mut Config) -> Result<()> {
                     }
                     autofocus.session_finished(started.elapsed().as_secs() as i64);
                     tracker = Tracker::new();
+                    last_sample = Instant::now();
                     pending_schedule = None;
                     continue;
                 }
@@ -141,6 +173,7 @@ pub fn watch(cfg: &mut Config) -> Result<()> {
                 .filter_map(|s| next_run_utc(s, now).map(|t| (t, s)))
                 .min_by_key(|(t, _)| *t);
 
+            pending_schedule = None;
             if let Some((at, sched)) = next {
                 let wait = (at - Utc::now()).num_seconds().max(0) as u64;
                 if wait <= POLL_SECS {
@@ -167,6 +200,10 @@ pub fn watch(cfg: &mut Config) -> Result<()> {
                 }
             }
         }
+
+        let Some((active, window, project)) = sample else {
+            continue;
+        };
 
         // Feed every sample, but never start during the initial target-loading minute.
         if let Some(target) = autofocus.observe(
@@ -204,6 +241,7 @@ pub fn watch(cfg: &mut Config) -> Result<()> {
             }
             autofocus.session_finished(started.elapsed().as_secs() as i64);
             tracker = Tracker::new();
+            last_sample = Instant::now();
             pending_schedule = None;
         }
     }
@@ -335,6 +373,20 @@ fn weekday_from(name: &str) -> Option<Weekday> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn early_wakeups_do_not_advance_the_sampling_clock() {
+        let start = Instant::now();
+        let mut last = start;
+        let mut samples = Vec::new();
+        // Realtime may wake us several times between normal usage samples.
+        for second in [0, 1, 2, 4, 5, 5, 6, 9, 10, 11, 30, 31, 34, 35] {
+            if sample_due(&mut last, start + Duration::from_secs(second)) {
+                samples.push(second);
+            }
+        }
+        assert_eq!(samples, vec![5, 10, 30, 35]);
+    }
     use serde_json::json;
 
     fn utc(value: &str) -> DateTime<Utc> {

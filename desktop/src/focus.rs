@@ -1,4 +1,5 @@
 use crate::overlay::{self, Tone};
+use crate::realtime::{self, Event};
 use crate::supabase::{RemoteDeviceEvent, RemoteFocusSession, Supabase};
 use crate::tracker::Tracker;
 use crate::{enforce, hosts, notify, project, usage};
@@ -60,6 +61,58 @@ fn remote_stop_requested(active: bool, observed_active: &mut bool) -> bool {
         false
     } else {
         *observed_active
+    }
+}
+
+/// Interrupt a sample wait for remote stops without advancing session time.
+/// Other invalidations are held until the watch loop resumes.
+struct RemoteStop {
+    last_check: Instant,
+    observed_active: bool,
+    deferred: Vec<Event>,
+}
+
+impl RemoteStop {
+    fn wait_sample(&mut self, sb: &Supabase, enabled: bool) -> bool {
+        let interval = Duration::from_secs(SAMPLE_SECS as u64);
+        if !enabled {
+            sleep(interval);
+            return false;
+        }
+        let started = Instant::now();
+        loop {
+            let timeout = interval.saturating_sub(started.elapsed()).min(
+                Duration::from_secs(REMOTE_CHECK_SECS as u64)
+                    .saturating_sub(self.last_check.elapsed()),
+            );
+            let events = realtime::wait(timeout);
+            let changed = events.contains(&Event::ActiveSession);
+            for event in events {
+                if event != Event::ActiveSession && !self.deferred.contains(&event) {
+                    self.deferred.push(event);
+                }
+            }
+            if changed || self.last_check.elapsed() >= Duration::from_secs(REMOTE_CHECK_SECS as u64)
+            {
+                self.last_check = Instant::now();
+                if let Ok(Some(session)) = sb.get_active_session() {
+                    if remote_stop_requested(session.active, &mut self.observed_active) {
+                        println!("Focus session ended from another device — stopping.");
+                        return true;
+                    }
+                }
+            }
+            if started.elapsed() >= interval {
+                return false;
+            }
+        }
+    }
+}
+
+impl Drop for RemoteStop {
+    fn drop(&mut self) {
+        // Reconcile the shared row and anything changed while this session ran.
+        realtime::publish(self.deferred.drain(..).chain([Event::ActiveSession]));
     }
 }
 
@@ -161,8 +214,11 @@ pub fn run_session(sb: &Supabase, device_id: &str, cfg: &SessionConfig) -> Resul
     let mut off_app: HashMap<String, i64> = HashMap::new();
     let mut seen: HashSet<String> = HashSet::new(); // apps already reported this run
     let mut ran_full_time = true;
-    let mut remote_since = 0i64; // secs since last active_sessions check
-    let mut remote_observed_active = cfg.broadcast || cfg.source.as_deref() != Some("AUTO");
+    let mut remote = RemoteStop {
+        last_check: Instant::now(),
+        observed_active: cfg.broadcast || cfg.source.as_deref() != Some("AUTO"),
+        deferred: Vec::new(),
+    };
     let mut last_usage_flush = Instant::now();
 
     'session: for cycle in 1..=cfg.cycles {
@@ -183,7 +239,12 @@ pub fn run_session(sb: &Supabase, device_id: &str, cfg: &SessionConfig) -> Resul
         let mut win_active = 0i64;
         let mut win_idle = 0i64;
         while elapsed < block_secs {
-            sleep(Duration::from_secs(SAMPLE_SECS as u64));
+            if remote.wait_sample(sb, cfg.watch_remote_stop) {
+                let remaining = (block_secs - elapsed)
+                    + (cfg.cycles - cycle) * (cfg.focus_min + cfg.break_min) * 60;
+                ran_full_time = finished_with_other_device(remaining);
+                break 'session;
+            }
             elapsed += SAMPLE_SECS;
             let active = tracker.sample_active();
             let window = tracker.active_window_info();
@@ -195,22 +256,6 @@ pub fn run_session(sb: &Supabase, device_id: &str, cfg: &SessionConfig) -> Resul
             if last_usage_flush.elapsed() >= Duration::from_secs(60) {
                 usage::flush(sb, device_id);
                 last_usage_flush = Instant::now();
-            }
-            // Stop early if the session was ended from another device (e.g. the phone).
-            if cfg.watch_remote_stop {
-                remote_since += SAMPLE_SECS;
-                if remote_since >= REMOTE_CHECK_SECS {
-                    remote_since = 0;
-                    if let Ok(Some(a)) = sb.get_active_session() {
-                        if remote_stop_requested(a.active, &mut remote_observed_active) {
-                            println!("Focus session ended from another device — stopping.");
-                            let remaining = (block_secs - elapsed)
-                                + (cfg.cycles - cycle) * (cfg.focus_min + cfg.break_min) * 60;
-                            ran_full_time = finished_with_other_device(remaining);
-                            break 'session;
-                        }
-                    }
-                }
             }
             if !app.is_empty() && seen.insert(app.clone()) {
                 let _ = sb.upsert_device_app(device_id, &app, &app);
@@ -257,8 +302,14 @@ pub fn run_session(sb: &Supabase, device_id: &str, cfg: &SessionConfig) -> Resul
                 "Look away from the screen and stretch.",
                 Tone::Warn,
             );
-            for _ in 0..(cfg.break_min * 60 / SAMPLE_SECS) {
-                sleep(Duration::from_secs(SAMPLE_SECS as u64));
+            for tick in 0..(cfg.break_min * 60 / SAMPLE_SECS) {
+                if remote.wait_sample(sb, cfg.watch_remote_stop) {
+                    let remaining = cfg.break_min * 60 - tick * SAMPLE_SECS
+                        + (cfg.cycles - cycle) * cfg.focus_min * 60
+                        + (cfg.cycles - cycle - 1) * cfg.break_min * 60;
+                    ran_full_time = finished_with_other_device(remaining);
+                    break 'session;
+                }
                 let active = tracker.sample_active();
                 let window = tracker.active_window_info();
                 if active {

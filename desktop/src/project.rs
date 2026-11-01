@@ -56,7 +56,9 @@ fn looks_like_file(value: &str) -> bool {
         return true;
     }
     value.rsplit_once('.').is_some_and(|(stem, ext)| {
-        !stem.is_empty() && (1..=6).contains(&ext.len()) && ext.chars().all(|c| c.is_ascii_alphanumeric())
+        !stem.is_empty()
+            && (1..=6).contains(&ext.len())
+            && ext.chars().all(|c| c.is_ascii_alphanumeric())
     })
 }
 
@@ -98,14 +100,20 @@ mod tests {
 
     #[test]
     fn paths_and_overlong_names_are_rejected() {
-        assert_eq!(parse_project("code", "a.rs - C:\\secret\\dir - Visual Studio Code"), None);
+        assert_eq!(
+            parse_project("code", "a.rs - C:\\secret\\dir - Visual Studio Code"),
+            None
+        );
         let long = format!("a.rs - {} - Visual Studio Code", "x".repeat(81));
         assert_eq!(parse_project("code", &long), None);
     }
 
     #[test]
     fn folder_only_window_is_still_a_project() {
-        assert_eq!(parse_project("code", "touchgrass - Visual Studio Code").as_deref(), Some("touchgrass"));
+        assert_eq!(
+            parse_project("code", "touchgrass - Visual Studio Code").as_deref(),
+            Some("touchgrass")
+        );
     }
 
     #[test]

@@ -6,12 +6,13 @@ mod hosts;
 mod notify;
 mod overlay;
 mod project;
+mod realtime;
 mod schedule;
 mod supabase;
 mod tracker;
-mod usage;
 #[cfg(windows)]
 mod tray;
+mod usage;
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Parser, Subcommand};
@@ -121,6 +122,7 @@ pub(crate) fn authed(cfg: &mut Config) -> Result<Supabase> {
     cfg.refresh_token = Some(session.refresh_token);
     cfg.save()?;
     sb.set_access(session.access_token);
+    realtime::set_access_token(sb.access_token()?);
     Ok(sb)
 }
 
@@ -195,6 +197,12 @@ pub(crate) fn resolve_policy(sb: &Supabase, cfg: &Config) -> supabase::Policy {
             || !p.blocked_apps.is_empty()
             || !p.force_quit_apps.is_empty()
             || !p.blocked_sites.is_empty()
+            // An already-empty policy needs no seed write. Rewriting it on a
+            // Realtime wakeup would generate another policy wakeup forever.
+            || (cfg.allowed_apps.is_empty()
+                && cfg.blocked_apps.is_empty()
+                && cfg.force_quit_apps.is_empty()
+                && cfg.blocked_sites.is_empty())
         {
             return p;
         }
@@ -216,10 +224,14 @@ fn run_cmd() -> Result<()> {
     };
     let mut cfg = Config::load()?;
     // Validate we can auth before entering the watch loop.
-    if let Err(e) = authed(&mut cfg) {
-        alert_startup_failure(&e);
-        return Err(e);
-    }
+    let sb = match authed(&mut cfg) {
+        Ok(sb) => sb,
+        Err(e) => {
+            alert_startup_failure(&e);
+            return Err(e);
+        }
+    };
+    realtime::start(&cfg.supabase_url, &cfg.anon_key, sb.access_token()?);
     hosts::clear(); // drop any stale block left by a previous unclean exit
     run_watch(cfg)
 }
