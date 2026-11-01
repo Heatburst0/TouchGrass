@@ -8,7 +8,13 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.Call
+import okhttp3.Callback
 import okhttp3.OkHttpClient
+import okhttp3.Response
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
@@ -30,10 +36,16 @@ import javax.inject.Singleton
 @Singleton
 class GeminiQuizGenerator @Inject constructor() : QuizGenerator {
 
+    // Tight timeouts: on a flaky connection it's better to fail fast and let the
+    // coordinator serve the offline quiz than to hang for minutes.
     private val client = OkHttpClient.Builder()
-        .connectTimeout(30, TimeUnit.SECONDS)
-        .readTimeout(90, TimeUnit.SECONDS)
+        .connectTimeout(8, TimeUnit.SECONDS)
+        .readTimeout(20, TimeUnit.SECONDS)
+        .callTimeout(25, TimeUnit.SECONDS)
         .build()
+
+    /** Models that rejected the thinking setting (older generations); sent without it. */
+    private val noThinkingModels = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
 
     override fun isConfigured(): Boolean = BuildConfig.GEMINI_API_KEY.isNotBlank()
 
@@ -81,23 +93,25 @@ class GeminiQuizGenerator @Inject constructor() : QuizGenerator {
     /** Shared request path: wrap [parts] in a request body, walk the model
      *  fallback list, and parse the winning response. */
     private suspend fun runGeneration(parts: JSONArray, questionCount: Int): List<QuizQuestion> {
-        val body = JSONObject()
-            .put("contents", JSONArray().put(JSONObject().put("parts", parts)))
-            .put(
-                "generationConfig",
-                JSONObject()
-                    .put("response_mime_type", "application/json")
-                    .put("temperature", 0.4)
-            )
-
-        val payload = body.toString()
+        val payloadFor = { thinking: Boolean ->
+            val config = JSONObject()
+                .put("response_mime_type", "application/json")
+                .put("temperature", 0.4)
+            // Writing 3 questions needs little reasoning; default "high" thinking is most
+            // of the wait. "low" is accepted by every Gemini 3.x Flash.
+            if (thinking) config.put("thinkingConfig", JSONObject().put("thinkingLevel", "low"))
+            JSONObject()
+                .put("contents", JSONArray().put(JSONObject().put("parts", parts)))
+                .put("generationConfig", config)
+                .toString()
+        }
 
         // Free-tier model availability shifts as Google deprecates models
         // (e.g. gemini-2.0-flash now has a free-tier limit of 0). Walk the
         // list until one answers instead of hard-coding a single model.
         var lastFailure: QuizGenerationException? = null
         for (model in MODELS) {
-            when (val outcome = requestWithRetry(model, payload)) {
+            when (val outcome = requestWithRetry(model, payloadFor)) {
                 is Outcome.Success -> {
                     if (model != MODELS.first()) {
                         Timber.tag("Quiz").i("Quiz served by fallback model %s", model)
@@ -122,9 +136,11 @@ class GeminiQuizGenerator @Inject constructor() : QuizGenerator {
      * backoff. Quota/retired errors (429/404) fall through to the next model;
      * bad-key errors (400/401/403) are fatal.
      */
-    private suspend fun requestWithRetry(model: String, payload: String): Outcome {
+    private suspend fun requestWithRetry(model: String, payloadFor: (Boolean) -> String): Outcome {
         var overloadFailure: QuizGenerationException? = null
         repeat(MAX_RETRIES) { attempt ->
+            val thinking = model !in noThinkingModels
+            val payload = payloadFor(thinking)
             val request = Request.Builder()
                 .url("$BASE_URL/models/$model:generateContent")
                 .header("x-goog-api-key", BuildConfig.GEMINI_API_KEY)
@@ -132,7 +148,7 @@ class GeminiQuizGenerator @Inject constructor() : QuizGenerator {
                 .build()
 
             try {
-                client.newCall(request).execute().use { response ->
+                client.newCall(request).await().use { response ->
                     val text = response.body?.string().orEmpty()
                     when {
                         response.isSuccessful -> return Outcome.Success(text)
@@ -163,6 +179,18 @@ class GeminiQuizGenerator @Inject constructor() : QuizGenerator {
                             )
                         }
 
+                        // A 400 that isn't about the key is most likely an older model
+                        // rejecting thinkingLevel: retry the same model without it.
+                        response.code == 400 && thinking && !isKeyError(text) -> {
+                            Timber.tag("Quiz").w("Model %s rejected thinking config: %s", model, text.take(200))
+                            noThinkingModels += model
+                            return@repeat // retry immediately, no backoff
+                        }
+
+                        response.code == 400 && !isKeyError(text) -> return Outcome.TryNextModel(
+                            QuizGenerationException("The quiz service rejected the request. Try again.")
+                        )
+
                         response.code == 400 || response.code == 401 || response.code == 403 ->
                             return Outcome.Fatal(
                                 QuizGenerationException(
@@ -176,9 +204,11 @@ class GeminiQuizGenerator @Inject constructor() : QuizGenerator {
                     }
                 }
             } catch (e: IOException) {
-                Timber.tag("Quiz").w(e, "Network error on %s, attempt %d/%d", model, attempt + 1, MAX_RETRIES)
-                overloadFailure = QuizGenerationException(
-                    "No connection to the quiz service. Check your internet.", e
+                // Network trouble won't fix itself in a second or two — fail fast so the
+                // coordinator can serve the offline quiz instead of retrying for minutes.
+                Timber.tag("Quiz").w(e, "Network error on %s", model)
+                return Outcome.Fatal(
+                    QuizGenerationException("No connection to the quiz service. Check your internet.", e)
                 )
             }
 
@@ -287,6 +317,20 @@ class GeminiQuizGenerator @Inject constructor() : QuizGenerator {
         }
     }
 
+    private fun isKeyError(body: String) =
+        body.contains("API_KEY", ignoreCase = true) || body.contains("API key", ignoreCase = true)
+
+    /** Async OkHttp call that is cancelled with the coroutine (so deadlines really abort it). */
+    private suspend fun Call.await(): Response = suspendCancellableCoroutine { cont ->
+        cont.invokeOnCancellation { cancel() }
+        enqueue(object : Callback {
+            override fun onResponse(call: Call, response: Response) = cont.resume(response)
+            override fun onFailure(call: Call, e: IOException) {
+                if (!cont.isCancelled) cont.resumeWithException(e)
+            }
+        })
+    }
+
     companion object {
         private const val BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 
@@ -303,7 +347,7 @@ class GeminiQuizGenerator @Inject constructor() : QuizGenerator {
         private const val MAX_DIMENSION_PX = 1536
         private const val JPEG_QUALITY = 80
         private const val MAX_TEXT_CHARS = 8000    // cap OCR text sent to the model
-        private const val MAX_RETRIES = 3          // per model, for 503/500/network
+        private const val MAX_RETRIES = 3          // per model, for 503/500 overloads
         private const val BASE_BACKOFF_MS = 1500L  // 1.5s, 3s between retries
     }
 }

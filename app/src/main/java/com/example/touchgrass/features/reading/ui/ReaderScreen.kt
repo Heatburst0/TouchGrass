@@ -1,5 +1,7 @@
 package com.example.touchgrass.features.reading.ui
 
+import kotlinx.coroutines.flow.first
+import java.util.concurrent.ConcurrentHashMap
 import android.content.Context
 import android.graphics.Bitmap
 import android.util.LruCache
@@ -164,6 +166,9 @@ class ReaderViewModel @Inject constructor(
     private var dwellJob: Job? = null
     private var flashJob: Job? = null
 
+    /** OCR'd text of pending pages, read in the background so the quiz only waits on the AI. */
+    private val pageTexts = ConcurrentHashMap<Int, String>()
+
     init {
         viewModelScope.launch {
             val book = repo.getBook(bookId)
@@ -177,6 +182,7 @@ class ReaderViewModel @Inject constructor(
                     startPage = book.lastPage.coerceIn(0, (book.pageCount - 1).coerceAtLeast(0)),
                     loaded = true
                 )
+                repo.pendingPages(bookId).first().sorted().take(MAX_QUIZ_PAGES).forEach(::prefetchText)
             }
         }
     }
@@ -204,6 +210,7 @@ class ReaderViewModel @Inject constructor(
         dwellJob = viewModelScope.launch {
             delay(PAGE_DWELL_MS)
             if (repo.markPagePending(bookId, pageIndex)) {
+                prefetchText(pageIndex)
                 showFlash("Page read - take the quiz to claim +${RewardsManager.POINTS_PER_PAGE} pts")
             }
         }
@@ -221,18 +228,17 @@ class ReaderViewModel @Inject constructor(
         viewModelScope.launch {
             val files = mutableListOf<File>()
             try {
-                // Render the pending pages to JPEGs — same input shape as page photos
-                withContext(Dispatchers.IO) {
-                    val dir = File(context.cacheDir, "quiz").apply { mkdirs() }
-                    pages.forEach { index ->
-                        val bmp = renderPage(index, QUIZ_RENDER_WIDTH_PX)
-                            ?: throw QuizGenerationException("Couldn't render page ${index + 1}.")
-                        val file = File(dir, "pdf_${bookId}_$index.jpg")
-                        file.outputStream().use { bmp.compress(Bitmap.CompressFormat.JPEG, 85, it) }
-                        files += file
+                val prefetched = pages.mapNotNull { pageTexts[it] }
+                val questions = if (prefetched.size == pages.size) {
+                    // Text already read in the background: straight to the AI (or offline quiz).
+                    quizCoordinator.makeQuizFromText(prefetched.joinToString("\n\n")) {
+                        files += renderQuizPages(pages)
+                        quizCoordinator.makeQuiz(files)
                     }
+                } else {
+                    files += renderQuizPages(pages)
+                    quizCoordinator.makeQuiz(files)
                 }
-                val questions = quizCoordinator.makeQuiz(files)
                 _quizPhase.value = PdfQuizPhase.Active(questions, pages)
             } catch (e: QuizGenerationException) {
                 _quizPhase.value = PdfQuizPhase.None
@@ -241,6 +247,31 @@ class ReaderViewModel @Inject constructor(
                 Timber.tag("Quiz").e(e, "PDF quiz generation failed")
                 _quizPhase.value = PdfQuizPhase.None
                 _quizError.value = "Something went wrong. Try again."
+            } finally {
+                withContext(Dispatchers.IO) { files.forEach(File::delete) }
+            }
+        }
+    }
+
+    /** Render [pages] to JPEGs — same input shape as page photos. */
+    private suspend fun renderQuizPages(pages: List<Int>): List<File> = withContext(Dispatchers.IO) {
+        val dir = File(context.cacheDir, "quiz").apply { mkdirs() }
+        pages.map { index ->
+            val bmp = renderPage(index, QUIZ_RENDER_WIDTH_PX)
+                ?: throw QuizGenerationException("Couldn't render page ${index + 1}.")
+            File(dir, "pdf_${bookId}_$index.jpg").also { file ->
+                file.outputStream().use { bmp.compress(Bitmap.CompressFormat.JPEG, 85, it) }
+            }
+        }
+    }
+
+    /** Best-effort background OCR of one page; the quiz falls back to doing it inline. */
+    private fun prefetchText(pageIndex: Int) {
+        if (pageTexts.containsKey(pageIndex)) return
+        viewModelScope.launch {
+            val files = runCatching { renderQuizPages(listOf(pageIndex)) }.getOrElse { return@launch }
+            try {
+                pageTexts[pageIndex] = quizCoordinator.readText(files)
             } finally {
                 withContext(Dispatchers.IO) { files.forEach(File::delete) }
             }
